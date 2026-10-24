@@ -8,6 +8,7 @@ interface OpenStatusBadgeProps {
 
 export const OpenStatusBadge: React.FC<OpenStatusBadgeProps> = ({
   isOpen,
+  onToggleDemo,
   showAdminToggle = false,
 }) => {
   return (
@@ -32,7 +33,6 @@ export const OpenStatusBadge: React.FC<OpenStatusBadgeProps> = ({
         </span>
       </div>
 
-      {/* O botão de alternância só aparece se explicitamente permitido com showAdminToggle={true} */}
       {showAdminToggle && onToggleDemo && (
         <button
           onClick={onToggleDemo}
