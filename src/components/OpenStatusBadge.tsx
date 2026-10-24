@@ -1,5 +1,4 @@
 import React from 'react';
-import { Power } from 'lucide-react';
 
 interface OpenStatusBadgeProps {
   isOpen: boolean;
@@ -9,7 +8,6 @@ interface OpenStatusBadgeProps {
 
 export const OpenStatusBadge: React.FC<OpenStatusBadgeProps> = ({
   isOpen,
-  onToggleDemo,
   showAdminToggle = false,
 }) => {
   return (
@@ -34,13 +32,13 @@ export const OpenStatusBadge: React.FC<OpenStatusBadgeProps> = ({
         </span>
       </div>
 
+      {/* O botão de alternância só aparece se explicitamente permitido com showAdminToggle={true} */}
       {showAdminToggle && onToggleDemo && (
         <button
           onClick={onToggleDemo}
-          title="Alternar status (Demonstração do botão do Barbeiro)"
-          className="ml-1 inline-flex items-center gap-1 rounded-md bg-neutral-800/90 px-2 py-0.5 text-[10px] font-semibold text-neutral-300 hover:bg-neutral-700 hover:text-white transition active:scale-95 shrink-0 border border-neutral-700"
+          title="Alternar status (Área do Barbeiro)"
+          className="ml-1 inline-flex items-center gap-1 rounded-md bg-neutral-800/90 px-2 py-0.5 text-[10px] font-semibold text-neutral-300 hover:bg-neutral-700 transition-colors"
         >
-          <Power className="w-2.5 h-2.5 text-amber-400" />
           <span>Trocar</span>
         </button>
       )}
