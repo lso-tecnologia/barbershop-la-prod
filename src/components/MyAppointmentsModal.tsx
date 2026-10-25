@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Scissors, AlertTriangle, MessageCircle, CheckCircle2, Ban, Lock, User, Search, RefreshCw, Phone } from 'lucide-react';
+import { X, Calendar, Clock, Scissors, AlertTriangle, MessageCircle, CheckCircle2, Ban, Lock, User } from 'lucide-react';
 import { UserAccount, AppointmentRecord } from '../types/barbershop';
 import { api } from '../services/api';
 
@@ -19,90 +19,26 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
   onOpenLoginModal,
 }) => {
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
-  const [phoneSearch, setPhoneSearch] = useState('');
-  const [isSearchingPhone, setIsSearchingPhone] = useState(false);
-  const [searchedPhoneSubmitted, setSearchedPhoneSubmitted] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-
-  // Formata o telefone (11) 9XXXX-XXXX
-  const formatPhone = (val: string) => {
-    const num = val.replace(/\D/g, '');
-    if (num.length <= 2) return num;
-    if (num.length <= 7) return `(${num.slice(0, 2)}) ${num.slice(2)}`;
-    return `(${num.slice(0, 2)}) ${num.slice(2, 7)}-${num.slice(7, 11)}`;
-  };
-
-  const loadAppointments = async () => {
-    setIsLoading(true);
-    setLoadError('');
-    setSuccessMessage('');
-
-    if (currentUser) {
-      try {
-        const list = await api.getMyAppointments();
-        setAppointments(list);
-      } catch (err: any) {
-        setAppointments([]);
-        setLoadError(err.message || 'Não foi possível carregar seus agendamentos.');
-      } finally {
-        setIsLoading(false);
-      }
-      return;
-    }
-
-    // Se não está logado, tenta recuperar do armazenamento local
-    try {
-      const savedPhone = localStorage.getItem('barbershop_last_phone') || '';
-      if (savedPhone && !phoneSearch) {
-        setPhoneSearch(savedPhone);
-      }
-
-      const raw = localStorage.getItem('barbershop_recent_appointments');
-      if (raw) {
-        const localList: AppointmentRecord[] = JSON.parse(raw);
-        if (Array.isArray(localList) && localList.length > 0) {
-          setAppointments(localList);
-        }
-      }
-    } catch {}
-
-    setIsLoading(false);
-  };
 
   useEffect(() => {
-    if (isOpen) {
-      loadAppointments();
+    if (isOpen && currentUser) {
+      setIsLoading(true);
+      setLoadError('');
+      api
+        .getMyAppointments()
+        .then(setAppointments)
+        .catch((err) => {
+          setAppointments([]);
+          setLoadError(err.message || 'Não foi possível carregar seus agendamentos.');
+        })
+        .finally(() => setIsLoading(false));
+    } else {
+      setAppointments([]);
     }
   }, [isOpen, currentUser]);
-
-  const handleSearchByPhone = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const clean = phoneSearch.replace(/\D/g, '');
-    if (clean.length < 8) {
-      setLoadError('Por favor, informe seu número de WhatsApp com DDD.');
-      return;
-    }
-
-    setIsSearchingPhone(true);
-    setLoadError('');
-    setSuccessMessage('');
-    try {
-      const results = await api.getAppointmentsByPhone(clean);
-      setAppointments(results);
-      setSearchedPhoneSubmitted(true);
-      localStorage.setItem('barbershop_last_phone', phoneSearch);
-      if (results.length === 0) {
-        setLoadError('Nenhum agendamento encontrado para este número.');
-      }
-    } catch (err: any) {
-      setLoadError(err.message || 'Erro ao buscar agendamentos.');
-    } finally {
-      setIsSearchingPhone(false);
-    }
-  };
 
   if (!isOpen) return null;
 
@@ -132,30 +68,10 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
     }
   };
 
-  const handleCancelAppointment = async (apt: AppointmentRecord) => {
-    setLoadError('');
-    setSuccessMessage('');
+  const handleCancelAppointment = async (id: string) => {
     try {
-      let updated: AppointmentRecord;
-      if (currentUser) {
-        updated = await api.cancelAppointment(apt.id);
-      } else {
-        const phone = apt.clientPhone || phoneSearch;
-        updated = await api.cancelAppointmentPublic(apt.id, phone);
-      }
-
-      setAppointments((prev) => prev.map((a) => (a.id === apt.id ? updated : a)));
-      setSuccessMessage('Agendamento cancelado com sucesso!');
-
-      // Atualiza no cache local
-      try {
-        const raw = localStorage.getItem('barbershop_recent_appointments');
-        if (raw) {
-          const list: AppointmentRecord[] = JSON.parse(raw);
-          const next = list.map((a) => (a.id === apt.id ? updated : a));
-          localStorage.setItem('barbershop_recent_appointments', JSON.stringify(next));
-        }
-      } catch {}
+      const updated = await api.cancelAppointment(id);
+      setAppointments((prev) => prev.map((apt) => (apt.id === id ? updated : apt)));
     } catch (err: any) {
       setLoadError(err.message || 'Não foi possível cancelar.');
     }
@@ -167,102 +83,67 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-lg rounded-3xl border border-amber-500/40 bg-[#121212] p-5 sm:p-7 shadow-2xl text-neutral-100 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+      <div className="relative w-full max-w-lg rounded-3xl border border-amber-500/40 bg-[#121212] p-6 sm:p-8 shadow-2xl text-neutral-100 max-h-[85vh] overflow-y-auto">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 sm:top-5 sm:right-5 rounded-xl p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          className="absolute top-5 right-5 rounded-xl p-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white"
           aria-label="Fechar"
         >
           <X className="w-5 h-5" />
         </button>
 
-        <div className="flex items-center gap-3 mb-5 pr-8">
-          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
             <Calendar className="w-5 h-5" />
           </div>
           <div>
             <span className="text-[10px] font-black uppercase tracking-widest text-amber-400">
-              Checar & Cancelar Horários
+              Histórico & Próximos Atendimentos
             </span>
-            <h3 className="font-display text-lg sm:text-xl font-bold text-white">
+            <h3 className="font-display text-xl font-bold text-white">
               Meus Agendamentos
             </h3>
           </div>
         </div>
 
-        {/* Busca por Telefone / WhatsApp para quem não está logado */}
-        {!currentUser && (
-          <div className="mb-5 rounded-2xl border border-neutral-800 bg-neutral-900/90 p-3.5 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-neutral-200 flex items-center gap-1.5">
-                <Search className="w-3.5 h-3.5 text-amber-400" />
-                <span>Consultar por WhatsApp / Telefone</span>
-              </span>
+        {/* Se o usuário não está autenticado, solicita login */}
+        {!currentUser ? (
+          <div className="text-center py-8 space-y-4">
+            <div className="w-14 h-14 rounded-full bg-amber-500/15 border border-amber-500/30 mx-auto flex items-center justify-center text-amber-400">
+              <Lock className="w-7 h-7" />
+            </div>
+            <div>
+              <h4 className="font-display text-base font-bold text-white">
+                Identificação Necessária
+              </h4>
+              <p className="text-xs text-neutral-400 mt-1 max-w-sm mx-auto">
+                Para visualizar seus agendamentos e histórico com total privacidade e segurança, entre com sua conta.
+              </p>
+            </div>
+            <div className="pt-2">
               <button
-                type="button"
                 onClick={() => {
                   onClose();
                   onOpenLoginModal();
                 }}
-                className="text-[11px] text-amber-400 hover:underline font-semibold"
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-3 text-xs font-black uppercase tracking-wider text-black shadow-lg hover:brightness-110 active:scale-98 transition-all"
               >
-                Fazer Login
+                <User className="w-4 h-4" />
+                <span>Fazer Login ou Criar Conta</span>
               </button>
             </div>
-
-            <form onSubmit={handleSearchByPhone} className="flex gap-2">
-              <div className="relative flex-1">
-                <Phone className="w-4 h-4 absolute left-3 top-3 text-neutral-500" />
-                <input
-                  type="tel"
-                  value={phoneSearch}
-                  onChange={(e) => setPhoneSearch(formatPhone(e.target.value))}
-                  placeholder="(11) 9XXXX-XXXX"
-                  className="w-full rounded-xl border border-neutral-700 bg-neutral-950 pl-9 pr-3 py-2 text-xs text-white placeholder-neutral-500 focus:border-amber-400 focus:outline-none"
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={isSearchingPhone}
-                className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-black hover:bg-amber-400 disabled:opacity-50"
-              >
-                {isSearchingPhone ? 'Buscando...' : 'Buscar'}
-              </button>
-            </form>
           </div>
-        )}
-
-        {/* Mensagens de Sucesso e Erro */}
-        {successMessage && (
-          <div className="mb-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs text-emerald-300 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-            <span>{successMessage}</span>
-          </div>
-        )}
-
-        {loadError && (
-          <div className="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-300 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-            <span>{loadError}</span>
-          </div>
-        )}
-
-        {isLoading ? (
+        ) : isLoading ? (
           <p className="text-center text-xs text-neutral-400 py-10">Carregando seus agendamentos...</p>
+        ) : loadError && appointments.length === 0 ? (
+          <p className="text-center text-xs text-rose-300 py-10">{loadError}</p>
         ) : appointments.length === 0 ? (
-          <div className="text-center py-8 space-y-4">
+          <div className="text-center py-10 space-y-4">
             <Scissors className="w-12 h-12 text-neutral-600 mx-auto" />
-            <div>
-              <h4 className="font-display text-sm font-bold text-white">
-                Nenhum agendamento encontrado
-              </h4>
-              <p className="text-xs text-neutral-400 mt-1 max-w-xs mx-auto">
-                {!currentUser && !searchedPhoneSubmitted
-                  ? 'Digite seu número de WhatsApp acima para buscar seus horários ou agende um novo horário.'
-                  : 'Você não possui horários agendados no momento.'}
-              </p>
-            </div>
+            <p className="text-xs text-neutral-400">
+              Olá, <strong>{currentUser.name}</strong>! Você ainda não possui nenhum agendamento registrado nesta conta.
+            </p>
             <button
               onClick={() => {
                 onClose();
@@ -270,7 +151,7 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
               }}
               className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-5 py-2.5 text-xs font-black uppercase tracking-wider text-black shadow-lg"
             >
-              Agendar Horário Agora
+              Agendar Meu Primeiro Horário
             </button>
           </div>
         ) : (
@@ -348,8 +229,8 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
                     <div className="pt-1 flex items-center justify-between gap-2">
                       {cancelable ? (
                         <button
-                          onClick={() => handleCancelAppointment(apt)}
-                          className="rounded-lg border border-rose-800/60 bg-rose-950/20 px-3 py-1.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-900/40 transition active:scale-95"
+                          onClick={() => handleCancelAppointment(apt.id)}
+                          className="rounded-lg border border-rose-800/60 bg-rose-950/20 px-3 py-1.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-900/40 transition"
                         >
                           Cancelar Agendamento
                         </button>

@@ -6,12 +6,12 @@ export const HoursAndLocation: React.FC = () => {
 
   const businessHours = [
     { day: 'Segunda-feira', hours: 'Fechado', isOpen: false, note: 'Dia de descanso' },
-    { day: 'Terça-feira', hours: '09h às 19h', isOpen: true, note: 'Slots de 30 min' },
-    { day: 'Quarta-feira', hours: '09h às 19h', isOpen: true, note: 'Slots de 30 min' },
-    { day: 'Quinta-feira', hours: '09h às 19h', isOpen: true, note: 'Slots de 30 min' },
-    { day: 'Sexta-feira', hours: '09h às 19h', isOpen: true, note: 'Slots de 30 min' },
-    { day: 'Sábado', hours: '09h às 19h', isOpen: true, note: 'Slots de 30 min' },
-    { day: 'Domingo', hours: '09h às 14h', isOpen: true, note: 'Slots de 30 min (até 13h30)' },
+    { day: 'Terça-feira', hours: '09h às 19h', isOpen: true, note: 'Horários de 30 em 30 min' },
+    { day: 'Quarta-feira', hours: '09h às 19h', isOpen: true, note: 'Horários de 30 em 30 min' },
+    { day: 'Quinta-feira', hours: '09h às 19h', isOpen: true, note: 'Horários de 30 em 30 min' },
+    { day: 'Sexta-feira', hours: '09h às 19h', isOpen: true, note: 'Horários de 30 em 30 min' },
+    { day: 'Sábado', hours: '09h às 19h', isOpen: true, note: 'Horários de 30 em 30 min' },
+    { day: 'Domingo', hours: '09h às 14h', isOpen: true, note: 'Horário de domingo' },
   ];
 
   return (
@@ -96,7 +96,7 @@ export const HoursAndLocation: React.FC = () => {
               Horário de <span className="text-gold-gradient">Funcionamento</span>
             </h3>
             <p className="text-xs sm:text-sm text-neutral-400 mt-1">
-              Atendimentos fracionados de 30 em 30 minutos com pontualidade e dedicação exclusiva para cada cliente.
+              Atendimentos de 1 em 1 hora com dedicação exclusiva para cada cliente.
             </p>
           </div>
 

@@ -22,6 +22,23 @@ import {
 import { ServiceItem, PromoPackage, UserAccount, AppointmentRecord } from '../types/barbershop';
 import { api } from '../services/api';
 
+// Horários de INÍCIO de 30 em 30 min (mesma regra do servidor: src/server/slots.ts)
+const SLOT_MIN = 30;
+const pad = (n: number) => String(n).padStart(2, '0');
+const minToTime = (m: number) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+const timeToMin = (t: string) => {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+};
+const buildSlots = (startHour: number, endHour: number): string[] => {
+  const out: string[] = [];
+  for (let m = startHour * 60; m < endHour * 60; m += SLOT_MIN) out.push(minToTime(m));
+  return out;
+};
+// Fatias de 30 min que um atendimento ocupa (ex.: 60 min às 09:00 -> 09:00 e 09:30)
+const coveredSlots = (time: string, durationMinutes: number): string[] =>
+  Array.from({ length: Math.max(1, Math.ceil(durationMinutes / SLOT_MIN)) }, (_, i) => minToTime(timeToMin(time) + i * SLOT_MIN));
+
 interface BookingModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -100,8 +117,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [clientPhone, setClientPhone] = useState(currentUser?.phone || '');
   const [clientEmail, setClientEmail] = useState(currentUser?.email || '');
 
-  // Forma de pagamento: Pix ou no local (cartão removido a pedido do cliente)
-  const [paymentMethod, setPaymentMethod] = useState<'in_person' | 'pix'>('pix');
+  // Forma de pagamento
+  const [paymentMethod, setPaymentMethod] = useState<'in_person' | 'pix'>('in_person');
 
   // Agendamento recém-criado
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
@@ -118,7 +135,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
   }, [currentUser]);
 
-  // Cálculo Dinâmico dos Slots Fracionados de 30 em 30 minutos e Validação de Domingo e Segunda
+  // Cálculo Dinâmico dos Slots e Validação de Domingo e Segunda
   const { dayOfWeek, isMonday, isSunday, availableSlots, scheduleLabel } = useMemo(() => {
     if (!selectedDate) {
       return { dayOfWeek: -1, isMonday: false, isSunday: false, availableSlots: [], scheduleLabel: '' };
@@ -140,40 +157,24 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
 
     if (dow === 0) {
-      // DOMINGO: 09h às 14h (slots fracionados de 30 em 30 min -> último às 13h30)
+      // DOMINGO: 09h às 14h (horários de 30 em 30 min)
+      // NENHUM SLOT APÓS 14H!
       return {
         dayOfWeek: 0,
         isMonday: false,
         isSunday: true,
-        availableSlots: [
-          '09:00', '09:30',
-          '10:00', '10:30',
-          '11:00', '11:30',
-          '12:00', '12:30',
-          '13:00', '13:30',
-        ],
-        scheduleLabel: 'Domingo: 09h às 14h (Horários de 30 em 30 min — Último às 13h30)',
+        availableSlots: buildSlots(9, 14),
+        scheduleLabel: 'Domingo: 09h às 14h (horários de 30 em 30 min)',
       };
     }
 
-    // TERÇA A SÁBADO: 09h às 19h (slots fracionados de 30 em 30 min -> último às 18h30)
+    // TERÇA A SÁBADO: 09h às 19h (horários de 30 em 30 min)
     return {
       dayOfWeek: dow,
       isMonday: false,
       isSunday: false,
-      availableSlots: [
-        '09:00', '09:30',
-        '10:00', '10:30',
-        '11:00', '11:30',
-        '12:00', '12:30',
-        '13:00', '13:30',
-        '14:00', '14:30',
-        '15:00', '15:30',
-        '16:00', '16:30',
-        '17:00', '17:30',
-        '18:00', '18:30',
-      ],
-      scheduleLabel: 'Terça a Sábado: 09h às 19h (Horários de 30 em 30 min — Último às 18h30)',
+      availableSlots: buildSlots(9, 19),
+      scheduleLabel: 'Terça a Sábado: 09h às 19h (horários de 30 em 30 min)',
     };
   }, [selectedDate]);
 
@@ -193,6 +194,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     : '';
 
   const currentItemPrice = chosenItem ? chosenItem.price : 0;
+  const itemDuration = chosenItem && 'durationMinutes' in chosenItem && chosenItem.durationMinutes > 0 ? chosenItem.durationMinutes : 60;
   const isPackage = chosenItem ? 'benefits' in chosenItem : false;
 
   // Formatar telefone (11) 9XXXX-XXXX
@@ -290,17 +292,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       }
       setCreatedAppointment(saved);
 
-      // Salva no armazenamento local do celular para fácil consulta e cancelamento
-      try {
-        const raw = localStorage.getItem('barbershop_recent_appointments');
-        const list: AppointmentRecord[] = raw ? JSON.parse(raw) : [];
-        const nextList = [saved, ...list.filter((x) => x.id !== saved!.id)].slice(0, 15);
-        localStorage.setItem('barbershop_recent_appointments', JSON.stringify(nextList));
-        localStorage.setItem('barbershop_last_phone', clientPhone);
-      } catch {}
-
       if (isOnline) {
-        // Vai para o Mercado Pago (Pix com QR Code e Copia e Cola)
+        // Vai para o Mercado Pago (somente Pix). O retorno é tratado em App.tsx.
         const url = await api.createCheckout(saved.id);
         redirecting = true;
         window.location.href = url;
@@ -576,7 +569,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center justify-between mb-2">
                   <span className="flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Selecione um Horário Disponível (de 30 em 30 min)</span>
+                    <span>Selecione um Horário ({itemDuration} min)</span>
                   </span>
                   {selectedSlot && (
                     <span className="text-amber-400 text-xs font-mono font-bold">
@@ -585,11 +578,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   )}
                 </label>
 
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 max-h-64 overflow-y-auto pr-1">
+                <p className="text-[11px] text-neutral-500 mb-2">Este atendimento dura <strong className="text-neutral-300">{itemDuration} min</strong> e ocupa {Math.ceil(itemDuration / SLOT_MIN)} horário(s) seguido(s).</p>
+
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                   {availableSlots.map((slot) => {
                     const isSelected = selectedSlot === slot;
                     const isPast = selectedDate === todayStr && new Date(`${selectedDate}T${slot}:00`).getTime() <= Date.now();
-                    const isUnavailable = takenTimes.includes(slot) || isPast;
+                    const needed = coveredSlots(slot, itemDuration);
+                    const isTaken = needed.some((t) => takenTimes.includes(t));
+                    const doesNotFit = needed.some((t) => !availableSlots.includes(t));
+                    const isUnavailable = isTaken || doesNotFit || isPast;
                     return (
                       <button
                         key={slot}
@@ -606,7 +604,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       >
                         <span className="text-sm font-mono">{slot}</span>
                         <span className="text-[9px] uppercase tracking-wider opacity-75">
-                          {isUnavailable ? (isPast ? 'Encerrado' : 'Ocupado') : isSelected ? 'Escolhido' : 'Disponível'}
+                          {isUnavailable ? (isPast ? 'Encerrado' : isTaken ? 'Ocupado' : 'Não cabe') : isSelected ? 'Escolhido' : 'Disponível'}
                         </span>
                       </button>
                     );
@@ -730,45 +728,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               Escolha como prefere acertar seu atendimento:
             </p>
 
-            <div className="space-y-3">
-              {/* Opção 1: Pix com Confirmação Instantânea */}
-              <label
-                onClick={() => onlineAllowed && setPaymentMethod('pix')}
-                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
-                  paymentMethod === 'pix'
-                    ? 'border-emerald-500/80 bg-emerald-500/10 shadow-lg shadow-emerald-950/20'
-                    : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="paymentMethod"
-                  checked={paymentMethod === 'pix'}
-                  onChange={() => setPaymentMethod('pix')}
-                  className="mt-1 text-emerald-500 focus:ring-emerald-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 font-bold text-white text-xs">
-                      <QrCode className="w-4 h-4 text-emerald-400" />
-                      <span>Pix (Mercado Pago)</span>
-                    </div>
-                    <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                      Recomendado
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-neutral-300 mt-1 leading-relaxed">
-                    Pagamento 100% seguro via Pix no Mercado Pago com QR Code e Copia e Cola. Confirmação instantânea e horário garantido.
-                  </p>
-                </div>
-              </label>
-
-              {/* Opção 2: Pagar no Local */}
+            <div className="space-y-2.5">
+              {/* Opção 1: Pagar no Local */}
               <label
                 onClick={() => setPaymentMethod('in_person')}
-                className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
+                className={`flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
                   paymentMethod === 'in_person'
-                    ? 'border-amber-500 bg-amber-500/10 shadow-lg shadow-amber-950/20'
+                    ? 'border-amber-500 bg-amber-500/10'
                     : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
                 }`}
               >
@@ -782,18 +748,46 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="flex-1">
                   <div className="flex items-center gap-2 font-bold text-white text-xs">
                     <DollarSign className="w-4 h-4 text-amber-400" />
-                    <span>Pagar no Local (Cadeira da Barbearia)</span>
+                    <span>Pagar no Local (Cadeira do Barbeiro)</span>
                   </div>
-                  <p className="text-[11px] text-neutral-400 mt-1 leading-relaxed">
-                    Pague em dinheiro ou Pix diretamente com o Leonardo Arruda ao finalizar o corte na cadeira.
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    Pague diretamente com o Leonardo após o atendimento (dinheiro, Pix ou cartão na maquininha).
                   </p>
                 </div>
               </label>
+
+              {/* Opção 2: Pix com QR Code */}
+              <label
+                onClick={() => onlineAllowed && setPaymentMethod('pix')}
+                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                  paymentMethod === 'pix'
+                    ? 'border-amber-500 bg-amber-500/10'
+                    : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  checked={paymentMethod === 'pix'}
+                  onChange={() => setPaymentMethod('pix')}
+                  className="mt-1 text-amber-500 focus:ring-amber-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 font-bold text-white text-xs">
+                    <QrCode className="w-4 h-4 text-emerald-400" />
+                    <span>Pix (Mercado Pago)</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    Pague pelo Pix no ambiente seguro do Mercado Pago. Confirmação automática.
+                  </p>
+                </div>
+              </label>
+
             </div>
 
             {isOnline && (
               <div className="rounded-xl bg-sky-500/10 border border-sky-500/30 p-3 text-[11px] text-sky-200/90">
-                🔒 Você será levado ao <strong>Mercado Pago</strong> para pagar. Seu horário fica reservado por <strong>15 minutos</strong>; se o pagamento não for concluído, ele é liberado automaticamente.
+                🔒 Você será levado ao <strong>Mercado Pago</strong> para pagar com <strong>Pix</strong>. Seu horário fica reservado por <strong>15 minutos</strong>; se o pagamento não for concluído, ele é liberado automaticamente.
               </div>
             )}
             {!onlineAllowed && (
@@ -837,7 +831,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 py-3 text-xs font-black uppercase tracking-wider text-black shadow-lg hover:brightness-110 active:scale-98"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>{isSubmitting ? (isOnline ? 'Abrindo Mercado Pago...' : 'Confirmando...') : isOnline ? 'Pagar com Mercado Pago' : 'Confirmar Agendamento'}</span>
+                <span>{isSubmitting ? (isOnline ? 'Abrindo o Pix...' : 'Confirmando...') : isOnline ? 'Pagar com Pix' : 'Confirmar Agendamento'}</span>
               </button>
             </div>
           </div>

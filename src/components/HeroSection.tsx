@@ -1,18 +1,16 @@
 import React from 'react';
-import { Scissors, Calendar, MapPin, ChevronDown, Sparkles, BookmarkCheck } from 'lucide-react';
+import { Scissors, Calendar, MapPin, ChevronDown, Sparkles } from 'lucide-react';
 import { OpenStatusBadge } from './OpenStatusBadge';
 
 interface HeroSectionProps {
   isOpen: boolean;
   onToggleDemoStatus?: () => void;
   onBookNow: () => void;
-  onOpenMyAppointments?: () => void;
 }
 
 export const HeroSection: React.FC<HeroSectionProps> = ({
   isOpen,
   onBookNow,
-  onOpenMyAppointments,
 }) => {
   return (
     <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden bg-black text-white">
@@ -78,32 +76,22 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
         </div>
 
         {/* Botões de Ação */}
-        <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-3 pt-4 max-w-3xl mx-auto">
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3.5 pt-4">
           <button
             onClick={onBookNow}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-600 px-7 py-3.5 sm:py-4 text-xs sm:text-sm font-black uppercase tracking-wider text-black shadow-2xl shadow-amber-950/60 transition-all hover:scale-102 active:scale-95 hover:brightness-110"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-amber-600 px-8 py-4 text-sm font-black uppercase tracking-wider text-black shadow-2xl shadow-amber-950/60 transition-all hover:scale-105 active:scale-95 hover:brightness-110"
           >
-            <Calendar className="w-4 h-4 text-black shrink-0" />
+            <Calendar className="w-4 h-4 text-black" />
             <span>Agendar Horário Agora</span>
           </button>
 
           <a
             href="#servicos"
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900/80 px-5 py-3.5 sm:py-4 text-xs font-bold uppercase tracking-wider text-neutral-200 backdrop-blur-sm hover:border-amber-500/50 hover:bg-neutral-800 transition-colors"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900/80 px-6 py-4 text-xs font-bold uppercase tracking-wider text-neutral-200 backdrop-blur-sm hover:border-amber-500/50 hover:bg-neutral-800 transition-colors"
           >
-            <Scissors className="w-4 h-4 text-amber-400 shrink-0" />
+            <Scissors className="w-4 h-4 text-amber-400" />
             <span>Ver Tabela de Preços</span>
           </a>
-
-          {onOpenMyAppointments && (
-            <button
-              onClick={onOpenMyAppointments}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-amber-500/10 px-5 py-3.5 sm:py-4 text-xs font-bold uppercase tracking-wider text-amber-300 backdrop-blur-sm hover:bg-amber-500/20 active:scale-95 transition-all shadow-lg"
-            >
-              <BookmarkCheck className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Meus Agendamentos (Checar / Cancelar)</span>
-            </button>
-          )}
         </div>
 
         {/* Indicador de rolagem */}

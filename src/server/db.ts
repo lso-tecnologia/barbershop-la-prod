@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { coveredSlots } from './slots.js';
 
 export interface UserRow {
   id: string;
@@ -23,6 +24,7 @@ export interface AppointmentRow {
   price: number;
   date: string;
   time: string;
+  durationMinutes: number;
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   paymentMethod: 'pix' | 'card' | 'in_person';
   paymentStatus: 'pending' | 'paid';
@@ -64,6 +66,7 @@ function mapAppointment(r: any): AppointmentRow {
     price: Number(r.price),
     date: r.date,
     time: r.time,
+    durationMinutes: Number(r.duration_minutes ?? 60),
     status: r.status,
     paymentMethod: r.payment_method,
     paymentStatus: r.payment_status,
@@ -284,15 +287,22 @@ export const db = {
   },
 
   // --- AGENDAMENTOS ---
+  // Todas as fatias de 30 min ocupadas no dia (considera a duração de cada atendimento)
   async getTakenTimes(date: string): Promise<string[]> {
+    const list = await db.getActiveAppointmentsForDate(date);
+    return [...new Set(list.flatMap((a) => coveredSlots(a.time, a.durationMinutes)))];
+  },
+
+  async getActiveAppointmentsForDate(date: string): Promise<{ time: string; durationMinutes: number }[]> {
     const { data, error } = await client()
       .from('appointments')
-      .select('time')
+      .select('time, duration_minutes')
       .eq('date', date)
       .in('status', ['pending', 'confirmed']);
-    if (error) fail('getTakenTimes', error);
-    return (data ?? []).map((r) => r.time);
+    if (error) fail('getActiveAppointmentsForDate', error);
+    return (data ?? []).map((r: any) => ({ time: r.time, durationMinutes: Number(r.duration_minutes ?? 60) }));
   },
+
 
   async createAppointment(a: Omit<AppointmentRow, 'id' | 'createdAt'>): Promise<AppointmentRow> {
     const row = {
@@ -306,6 +316,7 @@ export const db = {
       price: a.price,
       date: a.date,
       time: a.time,
+      duration_minutes: a.durationMinutes,
       status: a.status,
       payment_method: a.paymentMethod,
       payment_status: a.paymentStatus,
@@ -339,22 +350,6 @@ export const db = {
       .in('status', ['pending', 'confirmed']);
     if (error) fail('countActiveByPhone', error);
     return count ?? 0;
-  },
-
-  async getAppointmentsByPhone(phone: string): Promise<AppointmentRow[]> {
-    const clean = phone.replace(/\D/g, '');
-    const { data, error } = await client()
-      .from('appointments')
-      .select('*')
-      .order('date', { ascending: false })
-      .order('time', { ascending: false });
-    if (error) fail('getAppointmentsByPhone', error);
-    return (data ?? [])
-      .filter((r: any) => {
-        const p = String(r.client_phone || '').replace(/\D/g, '');
-        return p.includes(clean) || clean.includes(p);
-      })
-      .map(mapAppointment);
   },
 
   async getAppointmentById(id: string): Promise<AppointmentRow | undefined> {
@@ -406,21 +401,26 @@ export const db = {
   },
 
   // Preço oficial vindo do banco (nunca confiar no preço enviado pelo navegador)
-  async findCatalogPrice(name: string, type: 'service' | 'package'): Promise<number | null> {
+  async findCatalogItem(name: string, type: 'service' | 'package'): Promise<{ price: number; durationMinutes: number } | null> {
     const table = type === 'package' ? 'packages' : 'services';
     const { data, error } = await client().from(table).select('data').eq('is_active', true);
-    if (error) fail('findCatalogPrice', error);
+    if (error) fail('findCatalogItem', error);
     const wanted = name.trim().toLowerCase();
     for (const r of data ?? []) {
       const d: any = r.data ?? {};
       const n = String(d.name || d.title || '').trim().toLowerCase();
       if (n && n === wanted) {
         const price = d.price !== undefined ? Number(d.price) : Number(d.priceCents ?? 0) / 100;
-        return Number.isFinite(price) ? price : null;
+        const duration = Number(d.durationMinutes ?? 60);
+        return {
+          price: Number.isFinite(price) ? price : 0,
+          durationMinutes: Number.isFinite(duration) && duration > 0 ? duration : 60,
+        };
       }
     }
     return null;
   },
+
 
   // --- AUDITORIA ---
   async addAuditLog(action: string, details: string, userId?: string, userName?: string, ip?: string): Promise<void> {

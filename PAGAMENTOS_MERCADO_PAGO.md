@@ -1,3 +1,5 @@
+> 🔄 **ATUALIZAÇÃO:** o pagamento por **cartão foi removido**; hoje só existem **Pix** e **pagar no local**. Onde este documento falar em "Cartão", ignore. Veja `ALTERACOES_PIX_30MIN_CELULAR.md`.
+
 # BARBERSHOP L.A — Pagamentos online (Pix e Cartão com Mercado Pago)
 
 Documento de **passo a passo** + **registro de tudo que foi alterado** + **o que ainda falta**.

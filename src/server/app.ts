@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import { db } from './db.js';
+import { daySlots, coveredSlots } from './slots.js';
 
 const app = express();
 app.set('trust proxy', 1); // Vercel: pega o IP real do cliente (x-forwarded-for)
@@ -301,28 +302,7 @@ app.get('/api/notices/active', h(async (_req, res) => res.json(await db.getActiv
 const slotMoment = (date: string, time: string) => new Date(`${date}T${time}:00-03:00`);
 const todayBR = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 
-function validSlotsFor(date: string): string[] {
-  const [y, m, d] = date.split('-').map(Number);
-  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Dom, 1=Seg
-  if (dow === 1) return [];
-  // DOMINGO: 09h às 14h (slots fracionados de 30 em 30 min, último às 13h30)
-  if (dow === 0) {
-    return ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30'];
-  }
-  // TERÇA A SÁBADO: 09h às 19h (slots fracionados de 30 em 30 min, último às 18h30)
-  return [
-    '09:00', '09:30',
-    '10:00', '10:30',
-    '11:00', '11:30',
-    '12:00', '12:30',
-    '13:00', '13:30',
-    '14:00', '14:30',
-    '15:00', '15:30',
-    '16:00', '16:30',
-    '17:00', '17:30',
-    '18:00', '18:30',
-  ];
-}
+const validSlotsFor = daySlots; // horários de início (30 em 30 min) — ver src/server/slots.ts
 
 // Se houver token válido, identifica o usuário; senão segue como visitante
 function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction) {
@@ -374,13 +354,24 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
     return res.status(429).json({ error: 'Limite de 3 agendamentos ativos por telefone. Cancele um ou fale com o barbeiro.' });
   }
 
-  // Apenas Pix para online ou Pagar no Local (sem cartão)
-  const paymentMethod = b.paymentMethod === 'pix' ? 'pix' : 'in_person';
+  const paymentMethod: 'pix' | 'in_person' = b.paymentMethod === 'pix' ? 'pix' : 'in_person';
   const online = paymentMethod !== 'in_person';
   const itemType: 'service' | 'package' = b.itemType === 'package' ? 'package' : 'service';
 
   // Preço oficial do banco. Pagamento online EXIGE preço válido do catálogo.
-  const catalogPrice = await db.findCatalogPrice(itemName, itemType);
+  const catalogItem = await db.findCatalogItem(itemName, itemType);
+  const catalogPrice = catalogItem ? catalogItem.price : null;
+  const durationMinutes = catalogItem ? catalogItem.durationMinutes : 60;
+
+  // O atendimento ocupa 1 ou mais fatias de 30 min: todas precisam estar dentro do expediente e livres
+  const needed = coveredSlots(time, durationMinutes);
+  if (!needed.every((t) => slots.includes(t))) {
+    return res.status(400).json({ error: `Este atendimento dura ${durationMinutes} min e não cabe antes do fechamento nesse horário. Escolha um horário mais cedo.` });
+  }
+  const occupied = new Set((await db.getTakenTimes(date)));
+  if (needed.some((t) => occupied.has(t))) {
+    return res.status(409).json({ error: `Esse horário não está mais disponível (este atendimento ocupa ${durationMinutes} min). Escolha outro.` });
+  }
   if (online && !process.env.MP_ACCESS_TOKEN) {
     return res.status(503).json({ error: 'Pagamento online indisponível no momento. Escolha pagar no local.' });
   }
@@ -397,7 +388,7 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
       userId: req.user?.id ?? null,
       clientName, clientPhone, clientEmail: email, itemName,
       itemType,
-      price, date, time,
+      price, date, time, durationMinutes,
       // Online: fica "pendente" (segura o horário por 15 min) até o Mercado Pago confirmar o pagamento
       status: online ? 'pending' : 'confirmed',
       paymentMethod,
@@ -434,43 +425,6 @@ app.patch('/api/appointments/:id/cancel', authenticateToken, h(async (req, res) 
   }
   const updated = await db.updateAppointment(apt.id, { status: 'cancelled' });
   await db.addAuditLog('APPOINTMENT_CANCELLED', `Agendamento ${apt.id} cancelado`, req.user!.id, req.user!.name, req.ip);
-  return res.json({ appointment: updated });
-}));
-
-// Consulta pública segura de agendamentos pelo WhatsApp/Telefone
-app.post('/api/appointments/by-phone', h(async (req, res) => {
-  const phone = String(req.body?.phone || '').trim().replace(/\D/g, '');
-  if (phone.length < 8) {
-    return res.status(400).json({ error: 'Informe um WhatsApp/telefone com DDD.' });
-  }
-  const list = await db.getAppointmentsByPhone(phone);
-  return res.json({ appointments: list });
-}));
-
-// Cancelamento pelo WhatsApp/Telefone informado na reserva (respeita a regra de 2h de antecedência)
-app.patch('/api/appointments/:id/cancel-public', h(async (req, res) => {
-  const phone = String(req.body?.phone || '').trim().replace(/\D/g, '');
-  const apt = await db.getAppointmentById(req.params.id);
-  if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
-
-  const aptPhone = String(apt.clientPhone || '').replace(/\D/g, '');
-  if (!phone || aptPhone !== phone) {
-    return res.status(403).json({ error: 'O número de telefone não corresponde ao agendamento.' });
-  }
-  if (apt.status === 'cancelled' || apt.status === 'completed') {
-    return res.status(400).json({ error: 'Este agendamento não pode mais ser cancelado.' });
-  }
-  if (apt.paymentStatus === 'paid' && apt.paymentMethod !== 'in_person') {
-    return res.status(400).json({ error: 'Este horário já foi pago online via Pix. Para cancelar e solicitar estorno, fale diretamente com o Leonardo pelo WhatsApp.' });
-  }
-
-  const hoursLeft = (slotMoment(apt.date, apt.time).getTime() - Date.now()) / 3600000;
-  if (hoursLeft < 2) {
-    return res.status(400).json({ error: 'Cancelamento pelo app só é permitido com mais de 2 horas de antecedência. Para horários próximos, chame o Leonardo no WhatsApp.' });
-  }
-
-  const updated = await db.updateAppointment(apt.id, { status: 'cancelled' });
-  await db.addAuditLog('APPOINTMENT_CANCELLED', `Agendamento ${apt.id} cancelado pelo cliente via telefone`, undefined, apt.clientName, req.ip);
   return res.json({ appointment: updated });
 }));
 
@@ -566,7 +520,7 @@ app.post('/api/payments/checkout', h(async (req, res) => {
   await db.expireUnpaid();
   const apt = await db.getAppointmentById(id);
   if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
-  if (apt.paymentMethod === 'in_person') return res.status(400).json({ error: 'Este agendamento é para pagar no local.' });
+  if (apt.paymentMethod !== 'pix') return res.status(400).json({ error: 'Pagamento online disponível somente via Pix.' });
   if (apt.paymentStatus === 'paid') return res.status(400).json({ error: 'Este agendamento já foi pago.' });
   if (apt.status !== 'pending') return res.status(400).json({ error: 'Reserva expirada ou cancelada. Faça um novo agendamento.' });
   if (apt.price <= 0) return res.status(400).json({ error: 'Valor inválido para pagamento online.' });
@@ -575,14 +529,8 @@ app.post('/api/payments/checkout', h(async (req, res) => {
   const expiresAt = new Date(apt.createdAt).getTime() + HOLD_MINUTES * 60000;
   const expirationDateTo = new Date(expiresAt - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
 
-  // Apenas Pix permitido no Mercado Pago (exclui cartões de crédito/débito, pré-pago, boleto e atm)
-  const excluded = [
-    { id: 'credit_card' },
-    { id: 'debit_card' },
-    { id: 'prepaid_card' },
-    { id: 'ticket' },
-    { id: 'atm' },
-  ];
+  // Somente Pix: bloqueia cartões, boleto e caixa eletrônico no Checkout Pro
+  const excluded = [{ id: 'credit_card' }, { id: 'debit_card' }, { id: 'prepaid_card' }, { id: 'ticket' }, { id: 'atm' }];
 
   const pref = await mp('/checkout/preferences', {
     method: 'POST',

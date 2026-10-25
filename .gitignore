@@ -1,8 +1,10 @@
 node_modules/
-build/
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
+.vercel/
+.next/
+.env
+.env.*
 !.env.example
+*.pem
+npm-debug.log*
+barbershop_db.json

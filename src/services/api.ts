@@ -178,17 +178,6 @@ export const api = {
     return json.appointments || [];
   },
 
-  async getAppointmentsByPhone(phone: string): Promise<AppointmentRecord[]> {
-    const res = await fetch(`${API_BASE}/appointments/by-phone`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
-    });
-    const json = await parseJson(res);
-    if (!res.ok) throw new Error(json.error || 'Erro ao buscar agendamentos pelo telefone.');
-    return json.appointments || [];
-  },
-
   async cancelAppointment(id: string): Promise<AppointmentRecord> {
     const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}/cancel`, {
       method: 'PATCH',
@@ -196,17 +185,6 @@ export const api = {
     });
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro ao cancelar.');
-    return json.appointment;
-  },
-
-  async cancelAppointmentPublic(id: string, phone: string): Promise<AppointmentRecord> {
-    const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}/cancel-public`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
-    });
-    const json = await parseJson(res);
-    if (!res.ok) throw new Error(json.error || 'Erro ao cancelar agendamento.');
     return json.appointment;
   },
 

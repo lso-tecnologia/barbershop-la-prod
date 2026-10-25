@@ -187,7 +187,7 @@ export default function App() {
   const activeNotice: NoticeData = {
     id: 'notice-hours-la-2026-v2',
     title: 'Horário Estendido: Ter-Sáb até 19h e Dom até 14h!',
-    message: 'Agora você tem mais tempo para cuidar do seu visual! Atendemos de Terça a Sábado das 09h às 19h e aos Domingos das 09h às 14h (slots de 1h). Agende seu horário com antecedência!',
+    message: 'Agora você tem mais tempo para cuidar do seu visual! Atendemos de Terça a Sábado das 09h às 19h e aos Domingos das 09h às 14h (horários de 30 em 30 min). Agende seu horário com antecedência!',
     validUntil: '31/10/2026',
     isActive: true,
     priority: 'normal',
@@ -218,7 +218,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#080808] text-neutral-100 flex flex-col selection:bg-amber-500 selection:text-black">
+    <div className="min-h-screen bg-[#080808] text-neutral-100 flex flex-col pb-20 md:pb-0 selection:bg-amber-500 selection:text-black">
       {/* Indicador de Conexão Offline */}
       <OfflineIndicator />
 
@@ -240,7 +240,7 @@ export default function App() {
       />
 
       {/* Conteúdo Principal */}
-      <main className="flex-1 pb-16 sm:pb-0">
+      <main className="flex-1">
         {/* Hero Section com Fotos e Botões */}
         <HeroSection
           isOpen={isOpen}
@@ -249,7 +249,6 @@ export default function App() {
             setSelectedServiceItem(null);
             setIsBookingModalOpen(true);
           }}
-          onOpenMyAppointments={() => setIsMyAppointmentsOpen(true)}
         />
 
         {/* Tabela de Serviços e Promoções (Consumindo do Banco/API) */}
@@ -275,19 +274,19 @@ export default function App() {
         onOpenPrivacyModal={() => setIsPrivacyModalOpen(true)}
       />
 
-      {/* Barra de Navegação Rápida Inferior para Celular */}
+      {/* Botão Fixo do WhatsApp em Todas as Telas */}
+      <WhatsAppFloatingButton />
+
+      {/* Barra de navegação inferior (celular): Agendar, Meus horários, Conta */}
       <MobileBottomNav
         currentUser={currentUser}
-        onOpenBookingModal={() => {
+        onBook={() => {
           setSelectedServiceItem(null);
           setIsBookingModalOpen(true);
         }}
-        onOpenMyAppointments={() => setIsMyAppointmentsOpen(true)}
-        onOpenLoginModal={() => setIsAuthModalOpen(true)}
+        onMyAppointments={() => setIsMyAppointmentsOpen(true)}
+        onAccount={() => setIsAuthModalOpen(true)}
       />
-
-      {/* Botão Fixo do WhatsApp em Todas as Telas */}
-      <WhatsAppFloatingButton />
 
       {/* Modal de Agendamento Completo com Escolha de Serviços */}
       <BookingModal

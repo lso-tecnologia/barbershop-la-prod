@@ -1,3 +1,5 @@
+> 📱 **Última atualização (só Pix, horários de 30 min, celular):** veja `ALTERACOES_PIX_30MIN_CELULAR.md`.
+
 > 💳 **Pagamentos online (Pix/Cartão — Mercado Pago):** veja `PAGAMENTOS_MERCADO_PAGO.md` (passo a passo + alterações + pendências).
 
 # BARBERSHOP L.A — Relatório de correção e próximos passos
