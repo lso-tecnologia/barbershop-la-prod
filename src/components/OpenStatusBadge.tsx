@@ -8,11 +8,9 @@ interface OpenStatusBadgeProps {
 
 export const OpenStatusBadge: React.FC<OpenStatusBadgeProps> = ({
   isOpen,
-  onToggleDemo,
-  showAdminToggle = false,
 }) => {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-[#121212]/95 px-3 py-1.5 backdrop-blur-md shadow-xl">
+    <div className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-[#121212]/95 px-3 py-1.5 backdrop-blur-md shadow-xl select-none">
       <div className="flex items-center gap-2">
         <span className="relative flex h-2.5 w-2.5 shrink-0">
           {isOpen ? (
@@ -32,16 +30,6 @@ export const OpenStatusBadge: React.FC<OpenStatusBadgeProps> = ({
           {isOpen ? 'Barbearia Aberta' : 'Barbearia Fechada'}
         </span>
       </div>
-
-      {showAdminToggle && onToggleDemo && (
-        <button
-          onClick={onToggleDemo}
-          title="Alternar status (Área do Barbeiro)"
-          className="ml-1 inline-flex items-center gap-1 rounded-md bg-neutral-800/90 px-2 py-0.5 text-[10px] font-semibold text-neutral-300 hover:bg-neutral-700 transition-colors"
-        >
-          <span>Trocar</span>
-        </button>
-      )}
     </div>
   );
 };
