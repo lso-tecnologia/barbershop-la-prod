@@ -267,17 +267,34 @@ export const db = {
   async getPackages(): Promise<PackageRow[]> {
     const { data, error } = await client().from('packages').select('*');
     if (error) {
+      console.error('Falha ao buscar pacotes:', error.message);
       return [];
     }
-    return (data ?? []).map((r: any) => ({
-      id: r.id,
-      title: r.title || 'Pacote',
-      price: Number(r.price || 0),
-      economy: r.economy || '',
-      description: r.description || '',
-      benefits: Array.isArray(r.benefits) ? r.benefits : [],
-      isFeatured: !!r.is_featured,
-    }));
+
+    return (data ?? []).map((r: any) => {
+      // O schema oficial armazena os campos dentro da coluna JSONB "data".
+      // Mantemos fallback para instalações antigas que usavam colunas separadas.
+      const d = r.data && typeof r.data === 'object' ? r.data : r;
+      const rawPrice = d.price ?? r.price;
+      const rawPriceCents = d.priceCents ?? d.price_cents ?? r.priceCents ?? r.price_cents;
+      const parsedPrice = rawPrice !== undefined && rawPrice !== null
+        ? Number(rawPrice)
+        : rawPriceCents !== undefined && rawPriceCents !== null
+          ? Number(rawPriceCents) / 100
+          : 0;
+
+      return {
+        id: String(d.id ?? r.id),
+        title: String(d.title ?? r.title ?? 'Pacote'),
+        price: Number.isFinite(parsedPrice) ? parsedPrice : 0,
+        economy: String(d.economy ?? d.economyText ?? r.economy ?? r.economy_text ?? ''),
+        description: String(d.description ?? r.description ?? ''),
+        benefits: Array.isArray(d.benefits)
+          ? d.benefits
+          : Array.isArray(r.benefits) ? r.benefits : [],
+        isFeatured: Boolean(d.isFeatured ?? d.is_featured ?? r.is_featured ?? false),
+      };
+    });
   },
 
   async getActiveNotice(): Promise<any | null> {
