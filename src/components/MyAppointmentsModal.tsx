@@ -59,6 +59,15 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
     }
   };
 
+  const handlePayNow = async (id: string) => {
+    try {
+      const url = await api.createCheckout(id);
+      window.location.href = url;
+    } catch (err: any) {
+      setLoadError(err.message || 'Não foi possível abrir o pagamento.');
+    }
+  };
+
   const handleCancelAppointment = async (id: string) => {
     try {
       const updated = await api.cancelAppointment(id);
@@ -150,6 +159,7 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
             {appointments.map((apt) => {
               const cancelable = canCancelAppointment(apt.date, apt.time);
               const isCancelled = apt.status === 'cancelled';
+              const awaitingPayment = apt.status === 'pending' && apt.paymentMethod !== 'in_person' && apt.paymentStatus === 'pending';
 
               return (
                 <div
@@ -174,10 +184,12 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
                       className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
                         isCancelled
                           ? 'bg-rose-950/60 text-rose-400 border border-rose-800/40'
-                          : 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                          : awaitingPayment
+                            ? 'bg-amber-950/60 text-amber-300 border border-amber-800/40'
+                            : 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
                       }`}
                     >
-                      {isCancelled ? 'Cancelado' : 'Confirmado'}
+                      {isCancelled ? 'Cancelado' : awaitingPayment ? 'Aguardando pagamento' : 'Confirmado'}
                     </span>
                   </div>
 
@@ -199,10 +211,19 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
                     <div>
                       <span className="text-neutral-500">Pagamento: </span>
                       <span className="text-neutral-200 capitalize">
-                        {apt.paymentMethod === 'in_person' ? 'No Local' : apt.paymentMethod}
+                        {apt.paymentMethod === 'in_person' ? 'No Local' : apt.paymentMethod}{apt.paymentStatus === 'paid' ? ' · Pago ✔' : ''}
                       </span>
                     </div>
                   </div>
+
+                  {awaitingPayment && (
+                    <button
+                      onClick={() => handlePayNow(apt.id)}
+                      className="mb-2 w-full rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-2 text-[11px] font-black uppercase tracking-wider text-black hover:brightness-110"
+                    >
+                      Pagar agora (Mercado Pago)
+                    </button>
+                  )}
 
                   {!isCancelled && (
                     <div className="pt-1 flex items-center justify-between gap-2">

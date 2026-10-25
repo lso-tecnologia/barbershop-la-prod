@@ -328,6 +328,7 @@ const isValidDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4
 app.get('/api/appointments/taken', h(async (req, res) => {
   const date = req.query.date;
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+  await db.expireUnpaid();
   return res.json({ date, taken: await db.getTakenTimes(date) });
 }));
 
@@ -351,13 +352,26 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
     return res.status(400).json({ error: 'Preencha nome, WhatsApp e serviço.' });
   }
 
+  await db.expireUnpaid(); // libera reservas online não pagas antes de contar/checar
+
   // Anti-spam: no máximo 3 agendamentos ativos por telefone
   if ((await db.countActiveByPhone(clientPhone, todayBR())) >= 3) {
     return res.status(429).json({ error: 'Limite de 3 agendamentos ativos por telefone. Cancele um ou fale com o barbeiro.' });
   }
 
   const paymentMethod = ['pix', 'card', 'in_person'].includes(b.paymentMethod) ? b.paymentMethod : 'in_person';
-  const price = Math.min(Math.max(Number(b.price) || 0, 0), 2000);
+  const online = paymentMethod !== 'in_person';
+  const itemType: 'service' | 'package' = b.itemType === 'package' ? 'package' : 'service';
+
+  // Preço oficial do banco. Pagamento online EXIGE preço válido do catálogo.
+  const catalogPrice = await db.findCatalogPrice(itemName, itemType);
+  if (online && !process.env.MP_ACCESS_TOKEN) {
+    return res.status(503).json({ error: 'Pagamento online indisponível no momento. Escolha pagar no local.' });
+  }
+  if (online && (catalogPrice === null || catalogPrice <= 0)) {
+    return res.status(400).json({ error: 'Este item não pode ser pago online (valor à combinar). Escolha pagar no local.' });
+  }
+  const price = catalogPrice ?? Math.min(Math.max(Number(b.price) || 0, 0), 2000);
   const email = req.user
     ? req.user.email
     : String(b.clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`).trim().toLowerCase().slice(0, 120);
@@ -366,11 +380,12 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
     const apt = await db.createAppointment({
       userId: req.user?.id ?? null,
       clientName, clientPhone, clientEmail: email, itemName,
-      itemType: b.itemType === 'package' ? 'package' : 'service',
+      itemType,
       price, date, time,
-      status: 'confirmed',
+      // Online: fica "pendente" (segura o horário por 15 min) até o Mercado Pago confirmar o pagamento
+      status: online ? 'pending' : 'confirmed',
       paymentMethod,
-      paymentStatus: 'pending', // Pix só vira "pago" quando o barbeiro confirmar
+      paymentStatus: 'pending',
     });
     await db.addAuditLog('APPOINTMENT_CREATED', `${clientName} agendou ${itemName} em ${date} ${time}`, req.user?.id, clientName, req.ip);
     return res.status(201).json({ appointment: apt });
@@ -393,6 +408,9 @@ app.patch('/api/appointments/:id/cancel', authenticateToken, h(async (req, res) 
   const isOwner = apt.userId === req.user!.id || apt.clientEmail.toLowerCase() === req.user!.email.toLowerCase();
   if (!isAdmin && !isOwner) return res.status(403).json({ error: 'Você não pode cancelar este agendamento.' });
   if (apt.status === 'cancelled' || apt.status === 'completed') return res.status(400).json({ error: 'Este agendamento não pode mais ser cancelado.' });
+  if (!isAdmin && apt.paymentStatus === 'paid' && apt.paymentMethod !== 'in_person') {
+    return res.status(400).json({ error: 'Este horário já foi pago online. Para cancelar e pedir reembolso, fale com o barbeiro pelo WhatsApp.' });
+  }
 
   if (!isAdmin) {
     const hoursLeft = (slotMoment(apt.date, apt.time).getTime() - Date.now()) / 3600000;
@@ -419,6 +437,162 @@ app.patch('/api/admin/appointments/:id', authenticateToken, requireBarberAdmin, 
   if (!updated) return res.status(404).json({ error: 'Agendamento não encontrado.' });
   await db.addAuditLog('APPOINTMENT_UPDATED', `Agendamento ${updated.id}: ${status ?? ''} ${paymentStatus ?? ''}`.trim(), req.user!.id, req.user!.name, req.ip);
   return res.json({ appointment: updated });
+}));
+
+// ========== PAGAMENTOS ONLINE (MERCADO PAGO — Checkout Pro: Pix e Cartão) ==========
+
+const MP_API = 'https://api.mercadopago.com';
+const HOLD_MINUTES = 15;
+
+function siteUrl(req: Request): string {
+  const env = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
+  if (env) return env;
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol).split(',')[0];
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0];
+  return `${proto}://${host}`;
+}
+
+async function mp(path: string, init: { method?: string; body?: string } = {}): Promise<any> {
+  const token = process.env.MP_ACCESS_TOKEN;
+  if (!token) throw new Error('Pagamento online não configurado (MP_ACCESS_TOKEN ausente).');
+  const r = await fetch(`${MP_API}${path}`, {
+    method: init.method || 'GET',
+    body: init.body,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  const text = await r.text();
+  let json: any = {};
+  try { json = text ? JSON.parse(text) : {}; } catch { /* resposta não-JSON */ }
+  if (!r.ok) {
+    console.error('Mercado Pago erro', r.status, text);
+    throw new Error(`Mercado Pago recusou a requisição (${r.status}). ${json.message || ''}`.trim());
+  }
+  return json;
+}
+
+// Aplica um pagamento do Mercado Pago ao agendamento (idempotente)
+async function applyMpPayment(p: any): Promise<void> {
+  const ref = String(p?.external_reference || '');
+  if (!ref || p?.status !== 'approved') return;
+  const apt = await db.getAppointmentById(ref);
+  if (!apt || apt.paymentStatus === 'paid') return;
+
+  if (p.currency_id && p.currency_id !== 'BRL') return;
+  // transaction_amount = valor do item (parcelas com juros ficam em total_paid_amount)
+  if (Number(p.transaction_amount) + 0.01 < apt.price) {
+    await db.addAuditLog('PAYMENT_AMOUNT_MISMATCH', `Pagamento ${p.id} de R$ ${p.transaction_amount} para ${apt.id} (esperado R$ ${apt.price})`);
+    return;
+  }
+
+  const mpPaymentId = String(p.id);
+  try {
+    await db.updateAppointment(apt.id, {
+      status: apt.status === 'completed' ? 'completed' : 'confirmed',
+      paymentStatus: 'paid',
+      mpPaymentId,
+    });
+    await db.addAuditLog('PAYMENT_APPROVED', `Pagamento ${mpPaymentId} aprovado para ${apt.id}`, apt.userId ?? undefined, apt.clientName);
+  } catch (err: any) {
+    if (err.message !== 'SLOT_TAKEN') throw err;
+    // Pagou depois de a reserva expirar e o horário foi ocupado por outra pessoa -> reembolso manual
+    await db.updateAppointment(apt.id, { paymentStatus: 'paid', mpPaymentId });
+    await db.addAuditLog('PAYMENT_APPROVED_SLOT_LOST', `REEMBOLSAR pagamento ${mpPaymentId}: horário de ${apt.id} já foi ocupado`, apt.userId ?? undefined, apt.clientName);
+  }
+}
+
+async function syncPaymentFromMp(apt: { id: string }): Promise<void> {
+  const r = await mp(`/v1/payments/search?external_reference=${encodeURIComponent(apt.id)}&sort=date_created&criteria=desc&limit=5`);
+  for (const p of r.results || []) {
+    if (p.status === 'approved') { await applyMpPayment(p); break; }
+  }
+}
+
+// Cria o link de pagamento (Pix ou Cartão) para um agendamento pendente
+app.post('/api/payments/checkout', h(async (req, res) => {
+  const id = String(req.body?.appointmentId || '');
+  await db.expireUnpaid();
+  const apt = await db.getAppointmentById(id);
+  if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
+  if (apt.paymentMethod === 'in_person') return res.status(400).json({ error: 'Este agendamento é para pagar no local.' });
+  if (apt.paymentStatus === 'paid') return res.status(400).json({ error: 'Este agendamento já foi pago.' });
+  if (apt.status !== 'pending') return res.status(400).json({ error: 'Reserva expirada ou cancelada. Faça um novo agendamento.' });
+  if (apt.price <= 0) return res.status(400).json({ error: 'Valor inválido para pagamento online.' });
+
+  const base = siteUrl(req);
+  const expiresAt = new Date(apt.createdAt).getTime() + HOLD_MINUTES * 60000;
+  const expirationDateTo = new Date(expiresAt - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
+
+  const excluded =
+    apt.paymentMethod === 'pix'
+      ? [{ id: 'credit_card' }, { id: 'debit_card' }, { id: 'prepaid_card' }, { id: 'ticket' }, { id: 'atm' }]
+      : [{ id: 'ticket' }, { id: 'atm' }, { id: 'bank_transfer' }];
+
+  const pref = await mp('/checkout/preferences', {
+    method: 'POST',
+    body: JSON.stringify({
+      items: [{ id: apt.id, title: apt.itemName.slice(0, 120), description: 'BARBERSHOP L.A', quantity: 1, currency_id: 'BRL', unit_price: Number(apt.price.toFixed(2)) }],
+      payer: { name: apt.clientName },
+      external_reference: apt.id,
+      back_urls: {
+        success: `${base}/?pagamento=sucesso&apt=${apt.id}`,
+        pending: `${base}/?pagamento=pendente&apt=${apt.id}`,
+        failure: `${base}/?pagamento=falhou&apt=${apt.id}`,
+      },
+      auto_return: 'approved',
+      notification_url: `${base}/api/payments/webhook`,
+      expires: true,
+      expiration_date_to: expirationDateTo,
+      payment_methods: { excluded_payment_types: excluded, installments: apt.paymentMethod === 'card' ? 3 : 1 },
+    }),
+  });
+
+  if (!pref.init_point) throw new Error('O Mercado Pago não devolveu o link de pagamento.');
+  await db.updateAppointment(apt.id, { mpPreferenceId: String(pref.id) });
+  return res.json({ initPoint: pref.init_point });
+}));
+
+// Aviso automático (webhook) do Mercado Pago
+app.post('/api/payments/webhook', h(async (req, res) => {
+  const type = String(req.query.type || req.query.topic || req.body?.type || req.body?.topic || '');
+  const dataId = String(req.query['data.id'] || req.query.id || req.body?.data?.id || '');
+
+  const secret = process.env.MP_WEBHOOK_SECRET;
+  if (secret) {
+    const xSignature = String(req.headers['x-signature'] || '');
+    const xRequestId = String(req.headers['x-request-id'] || '');
+    let ts = '', v1 = '';
+    for (const part of xSignature.split(',')) {
+      const [k, v] = part.trim().split('=');
+      if (k === 'ts') ts = v; else if (k === 'v1') v1 = v;
+    }
+    const manifest = `${dataId ? `id:${dataId.toLowerCase()};` : ''}${xRequestId ? `request-id:${xRequestId};` : ''}ts:${ts};`;
+    const expected = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+    const ok = !!v1 && v1.length === expected.length && crypto.timingSafeEqual(Buffer.from(v1), Buffer.from(expected));
+    if (!ok) return res.status(401).json({ error: 'Assinatura inválida.' });
+  }
+
+  // Não confiamos no conteúdo do aviso: consultamos o pagamento direto no Mercado Pago
+  if (type === 'payment' && dataId) {
+    const payment = await mp(`/v1/payments/${encodeURIComponent(dataId)}`);
+    await applyMpPayment(payment);
+  }
+  return res.sendStatus(200);
+}));
+
+// Situação do pagamento (a tela de retorno consulta aqui)
+app.get('/api/payments/status/:id', h(async (req, res) => {
+  await db.expireUnpaid();
+  let apt = await db.getAppointmentById(req.params.id);
+  if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
+  if (apt.paymentMethod !== 'in_person' && apt.paymentStatus === 'pending' && apt.status === 'pending' && process.env.MP_ACCESS_TOKEN) {
+    try {
+      await syncPaymentFromMp(apt);
+      apt = (await db.getAppointmentById(apt.id)) ?? apt;
+    } catch (err) {
+      console.error('Falha ao sincronizar pagamento:', err);
+    }
+  }
+  return res.json({ status: apt.status, paymentStatus: apt.paymentStatus, paymentMethod: apt.paymentMethod, itemName: apt.itemName, date: apt.date, time: apt.time });
 }));
 
 // ========== SETUP ÚNICO DO ADMIN (protegido por SETUP_KEY) ==========

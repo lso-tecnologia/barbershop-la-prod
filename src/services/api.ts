@@ -205,4 +205,30 @@ export const api = {
     if (!res.ok) throw new Error(json.error || 'Erro ao atualizar.');
     return json.appointment;
   },
+
+  // --- PAGAMENTO ONLINE (Mercado Pago) ---
+  async createCheckout(appointmentId: string): Promise<string> {
+    const res = await fetch(`${API_BASE}/payments/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appointmentId }),
+    });
+    const json = await parseJson(res);
+    if (!res.ok || !json.initPoint) throw new Error(json.error || 'Não foi possível abrir o pagamento.');
+    return json.initPoint;
+  },
+
+  async getPaymentStatus(appointmentId: string): Promise<{
+    status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+    paymentStatus: 'pending' | 'paid';
+    paymentMethod: 'pix' | 'card' | 'in_person';
+    itemName: string;
+    date: string;
+    time: string;
+  }> {
+    const res = await fetch(`${API_BASE}/payments/status/${encodeURIComponent(appointmentId)}`);
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao consultar pagamento.');
+    return json;
+  },
 };

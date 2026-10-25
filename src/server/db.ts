@@ -26,6 +26,7 @@ export interface AppointmentRow {
   status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
   paymentMethod: 'pix' | 'card' | 'in_person';
   paymentStatus: 'pending' | 'paid';
+  mpPaymentId?: string | null;
   createdAt: string;
 }
 
@@ -66,6 +67,7 @@ function mapAppointment(r: any): AppointmentRow {
     status: r.status,
     paymentMethod: r.payment_method,
     paymentStatus: r.payment_status,
+    mpPaymentId: r.mp_payment_id ?? null,
     createdAt: r.created_at,
   };
 }
@@ -357,13 +359,51 @@ export const db = {
     return (data ?? []).map(mapAppointment);
   },
 
-  async updateAppointment(id: string, patch: { status?: string; paymentStatus?: string }): Promise<AppointmentRow | undefined> {
+  async updateAppointment(
+    id: string,
+    patch: { status?: string; paymentStatus?: string; mpPaymentId?: string; mpPreferenceId?: string }
+  ): Promise<AppointmentRow | undefined> {
     const upd: Record<string, string> = {};
     if (patch.status) upd.status = patch.status;
     if (patch.paymentStatus) upd.payment_status = patch.paymentStatus;
+    if (patch.mpPaymentId) upd.mp_payment_id = patch.mpPaymentId;
+    if (patch.mpPreferenceId) upd.mp_preference_id = patch.mpPreferenceId;
     const { data, error } = await client().from('appointments').update(upd).eq('id', id).select('*').maybeSingle();
-    if (error) fail('updateAppointment', error);
+    if (error) {
+      if ((error as any).code === '23505') throw new Error('SLOT_TAKEN');
+      fail('updateAppointment', error);
+    }
     return data ? mapAppointment(data) : undefined;
+  },
+
+  // Libera horários de pagamentos online não concluídos em 15 minutos
+  async expireUnpaid(): Promise<void> {
+    const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const { error } = await client()
+      .from('appointments')
+      .update({ status: 'cancelled' })
+      .eq('status', 'pending')
+      .eq('payment_status', 'pending')
+      .in('payment_method', ['pix', 'card'])
+      .lt('created_at', cutoff);
+    if (error) console.error('Falha ao expirar reservas não pagas:', error.message);
+  },
+
+  // Preço oficial vindo do banco (nunca confiar no preço enviado pelo navegador)
+  async findCatalogPrice(name: string, type: 'service' | 'package'): Promise<number | null> {
+    const table = type === 'package' ? 'packages' : 'services';
+    const { data, error } = await client().from(table).select('data').eq('is_active', true);
+    if (error) fail('findCatalogPrice', error);
+    const wanted = name.trim().toLowerCase();
+    for (const r of data ?? []) {
+      const d: any = r.data ?? {};
+      const n = String(d.name || d.title || '').trim().toLowerCase();
+      if (n && n === wanted) {
+        const price = d.price !== undefined ? Number(d.price) : Number(d.priceCents ?? 0) / 100;
+        return Number.isFinite(price) ? price : null;
+      }
+    }
+    return null;
   },
 
   // --- AUDITORIA ---

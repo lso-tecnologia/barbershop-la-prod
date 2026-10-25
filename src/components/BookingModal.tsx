@@ -250,35 +250,63 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   };
 
   // Confirmar Agendamento Final (Passo 5)
+  // Pagamento online só para itens com valor definido
+  const onlineAllowed = currentItemPrice > 0;
+  const effectiveMethod: 'in_person' | 'pix' | 'card' = onlineAllowed ? paymentMethod : 'in_person';
+  const isOnline = effectiveMethod !== 'in_person';
+
   const handleConfirmAppointment = async () => {
     if (!chosenItem || isSubmitting) return;
     setFormError('');
     setIsSubmitting(true);
+    let redirecting = false;
     try {
-      const saved = await api.createAppointment({
-        clientName,
-        clientPhone,
-        clientEmail: clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`,
-        itemName: currentItemName,
-        itemType: isPackage ? 'package' : 'service',
-        price: currentItemPrice,
-        date: selectedDate,
-        time: selectedSlot,
-        paymentMethod,
-      });
+      // Se já criamos a reserva pendente (ex.: falhou abrir o pagamento), reaproveita
+      let saved: AppointmentRecord | null =
+        createdAppointment &&
+        createdAppointment.status === 'pending' &&
+        createdAppointment.date === selectedDate &&
+        createdAppointment.time === selectedSlot &&
+        createdAppointment.paymentMethod === effectiveMethod
+          ? createdAppointment
+          : null;
+
+      if (!saved) {
+        saved = await api.createAppointment({
+          clientName,
+          clientPhone,
+          clientEmail: clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`,
+          itemName: currentItemName,
+          itemType: isPackage ? 'package' : 'service',
+          price: currentItemPrice,
+          date: selectedDate,
+          time: selectedSlot,
+          paymentMethod: effectiveMethod,
+        });
+      }
       setCreatedAppointment(saved);
+
+      if (isOnline) {
+        // Vai para o Mercado Pago (Pix ou Cartão). O retorno é tratado em App.tsx.
+        const url = await api.createCheckout(saved.id);
+        redirecting = true;
+        window.location.href = url;
+        return;
+      }
+
       if (onBookingConfirmed) onBookingConfirmed(saved);
       setStep(5);
     } catch (err: any) {
       setFormError(err.message || 'Não foi possível confirmar o agendamento.');
       if (err.status === 409) {
         // Horário foi ocupado por outra pessoa: volta e atualiza a lista
+        setCreatedAppointment(null);
         setSelectedSlot('');
         loadTakenTimes(selectedDate);
         setStep(2);
       }
     } finally {
-      setIsSubmitting(false);
+      if (!redirecting) setIsSubmitting(false);
     }
   };
 
@@ -719,8 +747,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
               {/* Opção 2: Pix com QR Code */}
               <label
-                onClick={() => setPaymentMethod('pix')}
-                className={`flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                onClick={() => onlineAllowed && setPaymentMethod('pix')}
+                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
                   paymentMethod === 'pix'
                     ? 'border-amber-500 bg-amber-500/10'
                     : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
@@ -736,18 +764,18 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="flex-1">
                   <div className="flex items-center gap-2 font-bold text-white text-xs">
                     <QrCode className="w-4 h-4 text-emerald-400" />
-                    <span>Pix Instantâneo (Mercado Pago Sandbox)</span>
+                    <span>Pix (Mercado Pago)</span>
                   </div>
                   <p className="text-[11px] text-neutral-400 mt-0.5">
-                    Gera QR Code e código Copia e Cola com confirmação automática.
+                    Pague pelo Pix no ambiente seguro do Mercado Pago. Confirmação automática.
                   </p>
                 </div>
               </label>
 
               {/* Opção 3: Cartão de Crédito */}
               <label
-                onClick={() => setPaymentMethod('card')}
-                className={`flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                onClick={() => onlineAllowed && setPaymentMethod('card')}
+                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
                   paymentMethod === 'card'
                     ? 'border-amber-500 bg-amber-500/10'
                     : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
@@ -766,11 +794,22 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     <span>Cartão de Crédito / Débito</span>
                   </div>
                   <p className="text-[11px] text-neutral-400 mt-0.5">
-                    Checkout seguro sem armazenamento de dados de cartão.
+                    Pague no ambiente seguro do Mercado Pago. Seus dados de cartão não passam pelo nosso app.
                   </p>
                 </div>
               </label>
             </div>
+
+            {isOnline && (
+              <div className="rounded-xl bg-sky-500/10 border border-sky-500/30 p-3 text-[11px] text-sky-200/90">
+                🔒 Você será levado ao <strong>Mercado Pago</strong> para pagar. Seu horário fica reservado por <strong>15 minutos</strong>; se o pagamento não for concluído, ele é liberado automaticamente.
+              </div>
+            )}
+            {!onlineAllowed && (
+              <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-3 text-[11px] text-neutral-400">
+                Este item é "à combinar", então só está disponível pagamento no local.
+              </div>
+            )}
 
             {/* Resumo Financeiro */}
             <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-3.5 space-y-1 text-xs">
@@ -807,7 +846,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 py-3 text-xs font-black uppercase tracking-wider text-black shadow-lg hover:brightness-110 active:scale-98"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>{isSubmitting ? 'Confirmando...' : 'Confirmar Agendamento'}</span>
+                <span>{isSubmitting ? (isOnline ? 'Abrindo Mercado Pago...' : 'Confirmando...') : isOnline ? 'Pagar com Mercado Pago' : 'Confirmar Agendamento'}</span>
               </button>
             </div>
           </div>

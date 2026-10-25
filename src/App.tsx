@@ -22,6 +22,7 @@ import { AdminAgendaModal } from './components/AdminAgendaModal';
 import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
 import { ServiceItem, PromoPackage, BarberProfile, NoticeData, UserAccount, AppointmentRecord } from './types/barbershop';
 import { api } from './services/api';
+import { PaymentReturnModal } from './components/PaymentReturnModal';
 
 export default function App() {
   // Status da Barbearia (Aberto/Fechado) - Controlável pelo barbeiro
@@ -222,6 +223,7 @@ export default function App() {
 
       {/* Pop-up de Aviso Ativo */}
       <NoticeModal notice={activeNotice} />
+      <PaymentReturnModal />
 
       {/* Header Fixo */}
       <Header

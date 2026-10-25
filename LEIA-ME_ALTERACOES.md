@@ -1,3 +1,5 @@
+> 💳 **Pagamentos online (Pix/Cartão — Mercado Pago):** veja `PAGAMENTOS_MERCADO_PAGO.md` (passo a passo + alterações + pendências).
+
 # BARBERSHOP L.A — Relatório de correção e próximos passos
 
 (Documento feito para você seguir sozinho **ou entregar para outra IA** continuar de onde parei.)
