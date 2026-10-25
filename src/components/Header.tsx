@@ -23,6 +23,9 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
+  // Verifica se o usuário atual é o administrador autenticado
+  const isAdmin = currentUser && currentUser.role === 'barber_admin';
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-neutral-900 bg-[#0a0a0a]/90 backdrop-blur-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-18 sm:h-20 flex items-center justify-between gap-4">
@@ -41,12 +44,12 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </a>
 
-        {/* Status Aberta / Fechada no centro (Desktop) */}
+        {/* Status Aberta / Fechada no centro (Desktop) - Só mostra botão se for Admin */}
         <div className="hidden md:flex items-center">
           <OpenStatusBadge
             isOpen={isOpen}
             onToggleDemo={onToggleDemoStatus}
-            showAdminToggle={true}
+            showAdminToggle={isAdmin}
           />
         </div>
 
@@ -73,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2 sm:gap-3">
           <PWAInstallButton compact={true} />
 
-          {/* Botão Meus Agendamentos (se tiver agendamento ou logado) */}
+          {/* Botão Meus Agendamentos */}
           <button
             onClick={onOpenMyAppointments}
             title="Ver meus horários agendados"
@@ -129,7 +132,7 @@ export const Header: React.FC<HeaderProps> = ({
             <OpenStatusBadge
               isOpen={isOpen}
               onToggleDemo={onToggleDemoStatus}
-              showAdminToggle={true}
+              showAdminToggle={isAdmin}
             />
           </div>
 
