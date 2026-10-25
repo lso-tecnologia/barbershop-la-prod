@@ -7,7 +7,7 @@ export const WhatsAppFloatingButton: React.FC = () => {
     encodeURIComponent('Olá, vim pelo app da BARBERSHOP L.A');
 
   return (
-    <aside aria-label="Atendimento via WhatsApp" className="fixed bottom-6 right-5 z-40">
+    <aside aria-label="Atendimento via WhatsApp" className="fixed bottom-20 sm:bottom-6 right-3 sm:right-5 z-30">
       <a
         href={whatsappUrl}
         target="_blank"

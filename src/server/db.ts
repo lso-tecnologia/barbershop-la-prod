@@ -341,6 +341,22 @@ export const db = {
     return count ?? 0;
   },
 
+  async getAppointmentsByPhone(phone: string): Promise<AppointmentRow[]> {
+    const clean = phone.replace(/\D/g, '');
+    const { data, error } = await client()
+      .from('appointments')
+      .select('*')
+      .order('date', { ascending: false })
+      .order('time', { ascending: false });
+    if (error) fail('getAppointmentsByPhone', error);
+    return (data ?? [])
+      .filter((r: any) => {
+        const p = String(r.client_phone || '').replace(/\D/g, '');
+        return p.includes(clean) || clean.includes(p);
+      })
+      .map(mapAppointment);
+  },
+
   async getAppointmentById(id: string): Promise<AppointmentRow | undefined> {
     const { data, error } = await client().from('appointments').select('*').eq('id', id).maybeSingle();
     if (error) fail('getAppointmentById', error);

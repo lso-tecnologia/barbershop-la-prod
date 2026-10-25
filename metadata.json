@@ -1,6 +1,6 @@
 {
-  "name": "BARBERSHOP L.A",
-  "description": "PWA oficial da Barbearia BARBERSHOP L.A com agendamento online, tabela de serviços e área de clientes.",
+  "name": "",
+  "description": "",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

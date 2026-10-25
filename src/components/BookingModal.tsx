@@ -10,7 +10,6 @@ import {
   User,
   Phone,
   Mail,
-  CreditCard,
   QrCode,
   DollarSign,
   MessageCircle,
@@ -101,8 +100,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [clientPhone, setClientPhone] = useState(currentUser?.phone || '');
   const [clientEmail, setClientEmail] = useState(currentUser?.email || '');
 
-  // Forma de pagamento
-  const [paymentMethod, setPaymentMethod] = useState<'in_person' | 'pix' | 'card'>('in_person');
+  // Forma de pagamento: Pix ou no local (cartão removido a pedido do cliente)
+  const [paymentMethod, setPaymentMethod] = useState<'in_person' | 'pix'>('pix');
 
   // Agendamento recém-criado
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
@@ -119,7 +118,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
   }, [currentUser]);
 
-  // Cálculo Dinâmico dos Slots e Validação de Domingo e Segunda
+  // Cálculo Dinâmico dos Slots Fracionados de 30 em 30 minutos e Validação de Domingo e Segunda
   const { dayOfWeek, isMonday, isSunday, availableSlots, scheduleLabel } = useMemo(() => {
     if (!selectedDate) {
       return { dayOfWeek: -1, isMonday: false, isSunday: false, availableSlots: [], scheduleLabel: '' };
@@ -141,35 +140,40 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
 
     if (dow === 0) {
-      // DOMINGO: 09h às 14h (slots de 1h -> 09:00, 10:00, 11:00, 12:00, 13:00)
-      // NENHUM SLOT APÓS 14H!
+      // DOMINGO: 09h às 14h (slots fracionados de 30 em 30 min -> último às 13h30)
       return {
         dayOfWeek: 0,
         isMonday: false,
         isSunday: true,
-        availableSlots: ['09:00', '10:00', '11:00', '12:00', '13:00'],
-        scheduleLabel: 'Domingo: 09h às 14h (Último atendimento às 13h)',
+        availableSlots: [
+          '09:00', '09:30',
+          '10:00', '10:30',
+          '11:00', '11:30',
+          '12:00', '12:30',
+          '13:00', '13:30',
+        ],
+        scheduleLabel: 'Domingo: 09h às 14h (Horários de 30 em 30 min — Último às 13h30)',
       };
     }
 
-    // TERÇA A SÁBADO: 09h às 19h (slots de 1h -> 09:00 até 18:00)
+    // TERÇA A SÁBADO: 09h às 19h (slots fracionados de 30 em 30 min -> último às 18h30)
     return {
       dayOfWeek: dow,
       isMonday: false,
       isSunday: false,
       availableSlots: [
-        '09:00',
-        '10:00',
-        '11:00',
-        '12:00',
-        '13:00',
-        '14:00',
-        '15:00',
-        '16:00',
-        '17:00',
-        '18:00',
+        '09:00', '09:30',
+        '10:00', '10:30',
+        '11:00', '11:30',
+        '12:00', '12:30',
+        '13:00', '13:30',
+        '14:00', '14:30',
+        '15:00', '15:30',
+        '16:00', '16:30',
+        '17:00', '17:30',
+        '18:00', '18:30',
       ],
-      scheduleLabel: 'Terça a Sábado: 09h às 19h (Último atendimento às 18h)',
+      scheduleLabel: 'Terça a Sábado: 09h às 19h (Horários de 30 em 30 min — Último às 18h30)',
     };
   }, [selectedDate]);
 
@@ -252,7 +256,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // Confirmar Agendamento Final (Passo 5)
   // Pagamento online só para itens com valor definido
   const onlineAllowed = currentItemPrice > 0;
-  const effectiveMethod: 'in_person' | 'pix' | 'card' = onlineAllowed ? paymentMethod : 'in_person';
+  const effectiveMethod: 'in_person' | 'pix' = onlineAllowed ? paymentMethod : 'in_person';
   const isOnline = effectiveMethod !== 'in_person';
 
   const handleConfirmAppointment = async () => {
@@ -286,8 +290,17 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       }
       setCreatedAppointment(saved);
 
+      // Salva no armazenamento local do celular para fácil consulta e cancelamento
+      try {
+        const raw = localStorage.getItem('barbershop_recent_appointments');
+        const list: AppointmentRecord[] = raw ? JSON.parse(raw) : [];
+        const nextList = [saved, ...list.filter((x) => x.id !== saved!.id)].slice(0, 15);
+        localStorage.setItem('barbershop_recent_appointments', JSON.stringify(nextList));
+        localStorage.setItem('barbershop_last_phone', clientPhone);
+      } catch {}
+
       if (isOnline) {
-        // Vai para o Mercado Pago (Pix ou Cartão). O retorno é tratado em App.tsx.
+        // Vai para o Mercado Pago (Pix com QR Code e Copia e Cola)
         const url = await api.createCheckout(saved.id);
         redirecting = true;
         window.location.href = url;
@@ -563,7 +576,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <label className="text-xs font-bold text-neutral-300 uppercase tracking-wider flex items-center justify-between mb-2">
                   <span className="flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Selecione um Horário Disponível (1h)</span>
+                    <span>Selecione um Horário Disponível (de 30 em 30 min)</span>
                   </span>
                   {selectedSlot && (
                     <span className="text-amber-400 text-xs font-mono font-bold">
@@ -572,7 +585,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   )}
                 </label>
 
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 max-h-64 overflow-y-auto pr-1">
                   {availableSlots.map((slot) => {
                     const isSelected = selectedSlot === slot;
                     const isPast = selectedDate === todayStr && new Date(`${selectedDate}T${slot}:00`).getTime() <= Date.now();
@@ -717,13 +730,45 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               Escolha como prefere acertar seu atendimento:
             </p>
 
-            <div className="space-y-2.5">
-              {/* Opção 1: Pagar no Local */}
+            <div className="space-y-3">
+              {/* Opção 1: Pix com Confirmação Instantânea */}
+              <label
+                onClick={() => onlineAllowed && setPaymentMethod('pix')}
+                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
+                  paymentMethod === 'pix'
+                    ? 'border-emerald-500/80 bg-emerald-500/10 shadow-lg shadow-emerald-950/20'
+                    : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="paymentMethod"
+                  checked={paymentMethod === 'pix'}
+                  onChange={() => setPaymentMethod('pix')}
+                  className="mt-1 text-emerald-500 focus:ring-emerald-500"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-white text-xs">
+                      <QrCode className="w-4 h-4 text-emerald-400" />
+                      <span>Pix (Mercado Pago)</span>
+                    </div>
+                    <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                      Recomendado
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-300 mt-1 leading-relaxed">
+                    Pagamento 100% seguro via Pix no Mercado Pago com QR Code e Copia e Cola. Confirmação instantânea e horário garantido.
+                  </p>
+                </div>
+              </label>
+
+              {/* Opção 2: Pagar no Local */}
               <label
                 onClick={() => setPaymentMethod('in_person')}
-                className={`flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer transition-all ${
                   paymentMethod === 'in_person'
-                    ? 'border-amber-500 bg-amber-500/10'
+                    ? 'border-amber-500 bg-amber-500/10 shadow-lg shadow-amber-950/20'
                     : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
                 }`}
               >
@@ -737,64 +782,10 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="flex-1">
                   <div className="flex items-center gap-2 font-bold text-white text-xs">
                     <DollarSign className="w-4 h-4 text-amber-400" />
-                    <span>Pagar no Local (Cadeira do Barbeiro)</span>
+                    <span>Pagar no Local (Cadeira da Barbearia)</span>
                   </div>
-                  <p className="text-[11px] text-neutral-400 mt-0.5">
-                    Pague em dinheiro, Pix ou cartão diretamente com o Leonardo após o corte.
-                  </p>
-                </div>
-              </label>
-
-              {/* Opção 2: Pix com QR Code */}
-              <label
-                onClick={() => onlineAllowed && setPaymentMethod('pix')}
-                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
-                  paymentMethod === 'pix'
-                    ? 'border-amber-500 bg-amber-500/10'
-                    : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="paymentMethod"
-                  checked={paymentMethod === 'pix'}
-                  onChange={() => setPaymentMethod('pix')}
-                  className="mt-1 text-amber-500 focus:ring-amber-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 font-bold text-white text-xs">
-                    <QrCode className="w-4 h-4 text-emerald-400" />
-                    <span>Pix (Mercado Pago)</span>
-                  </div>
-                  <p className="text-[11px] text-neutral-400 mt-0.5">
-                    Pague pelo Pix no ambiente seguro do Mercado Pago. Confirmação automática.
-                  </p>
-                </div>
-              </label>
-
-              {/* Opção 3: Cartão de Crédito */}
-              <label
-                onClick={() => onlineAllowed && setPaymentMethod('card')}
-                className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
-                  paymentMethod === 'card'
-                    ? 'border-amber-500 bg-amber-500/10'
-                    : 'border-neutral-800 bg-neutral-900 hover:border-neutral-700'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="paymentMethod"
-                  checked={paymentMethod === 'card'}
-                  onChange={() => setPaymentMethod('card')}
-                  className="mt-1 text-amber-500 focus:ring-amber-500"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 font-bold text-white text-xs">
-                    <CreditCard className="w-4 h-4 text-blue-400" />
-                    <span>Cartão de Crédito / Débito</span>
-                  </div>
-                  <p className="text-[11px] text-neutral-400 mt-0.5">
-                    Pague no ambiente seguro do Mercado Pago. Seus dados de cartão não passam pelo nosso app.
+                  <p className="text-[11px] text-neutral-400 mt-1 leading-relaxed">
+                    Pague em dinheiro ou Pix diretamente com o Leonardo Arruda ao finalizar o corte na cadeira.
                   </p>
                 </div>
               </label>

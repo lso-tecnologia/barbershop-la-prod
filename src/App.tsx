@@ -23,6 +23,7 @@ import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
 import { ServiceItem, PromoPackage, BarberProfile, NoticeData, UserAccount, AppointmentRecord } from './types/barbershop';
 import { api } from './services/api';
 import { PaymentReturnModal } from './components/PaymentReturnModal';
+import { MobileBottomNav } from './components/MobileBottomNav';
 
 export default function App() {
   // Status da Barbearia (Aberto/Fechado) - Controlável pelo barbeiro
@@ -239,7 +240,7 @@ export default function App() {
       />
 
       {/* Conteúdo Principal */}
-      <main className="flex-1">
+      <main className="flex-1 pb-16 sm:pb-0">
         {/* Hero Section com Fotos e Botões */}
         <HeroSection
           isOpen={isOpen}
@@ -248,6 +249,7 @@ export default function App() {
             setSelectedServiceItem(null);
             setIsBookingModalOpen(true);
           }}
+          onOpenMyAppointments={() => setIsMyAppointmentsOpen(true)}
         />
 
         {/* Tabela de Serviços e Promoções (Consumindo do Banco/API) */}
@@ -271,6 +273,17 @@ export default function App() {
       <Footer
         onOpenBarberLogin={() => setIsBarberAdminModalOpen(true)}
         onOpenPrivacyModal={() => setIsPrivacyModalOpen(true)}
+      />
+
+      {/* Barra de Navegação Rápida Inferior para Celular */}
+      <MobileBottomNav
+        currentUser={currentUser}
+        onOpenBookingModal={() => {
+          setSelectedServiceItem(null);
+          setIsBookingModalOpen(true);
+        }}
+        onOpenMyAppointments={() => setIsMyAppointmentsOpen(true)}
+        onOpenLoginModal={() => setIsAuthModalOpen(true)}
       />
 
       {/* Botão Fixo do WhatsApp em Todas as Telas */}

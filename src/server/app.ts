@@ -305,8 +305,23 @@ function validSlotsFor(date: string): string[] {
   const [y, m, d] = date.split('-').map(Number);
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Dom, 1=Seg
   if (dow === 1) return [];
-  if (dow === 0) return ['09:00', '10:00', '11:00', '12:00', '13:00'];
-  return ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00'];
+  // DOMINGO: 09h às 14h (slots fracionados de 30 em 30 min, último às 13h30)
+  if (dow === 0) {
+    return ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '12:30', '13:00', '13:30'];
+  }
+  // TERÇA A SÁBADO: 09h às 19h (slots fracionados de 30 em 30 min, último às 18h30)
+  return [
+    '09:00', '09:30',
+    '10:00', '10:30',
+    '11:00', '11:30',
+    '12:00', '12:30',
+    '13:00', '13:30',
+    '14:00', '14:30',
+    '15:00', '15:30',
+    '16:00', '16:30',
+    '17:00', '17:30',
+    '18:00', '18:30',
+  ];
 }
 
 // Se houver token válido, identifica o usuário; senão segue como visitante
@@ -359,7 +374,8 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
     return res.status(429).json({ error: 'Limite de 3 agendamentos ativos por telefone. Cancele um ou fale com o barbeiro.' });
   }
 
-  const paymentMethod = ['pix', 'card', 'in_person'].includes(b.paymentMethod) ? b.paymentMethod : 'in_person';
+  // Apenas Pix para online ou Pagar no Local (sem cartão)
+  const paymentMethod = b.paymentMethod === 'pix' ? 'pix' : 'in_person';
   const online = paymentMethod !== 'in_person';
   const itemType: 'service' | 'package' = b.itemType === 'package' ? 'package' : 'service';
 
@@ -421,6 +437,43 @@ app.patch('/api/appointments/:id/cancel', authenticateToken, h(async (req, res) 
   return res.json({ appointment: updated });
 }));
 
+// Consulta pública segura de agendamentos pelo WhatsApp/Telefone
+app.post('/api/appointments/by-phone', h(async (req, res) => {
+  const phone = String(req.body?.phone || '').trim().replace(/\D/g, '');
+  if (phone.length < 8) {
+    return res.status(400).json({ error: 'Informe um WhatsApp/telefone com DDD.' });
+  }
+  const list = await db.getAppointmentsByPhone(phone);
+  return res.json({ appointments: list });
+}));
+
+// Cancelamento pelo WhatsApp/Telefone informado na reserva (respeita a regra de 2h de antecedência)
+app.patch('/api/appointments/:id/cancel-public', h(async (req, res) => {
+  const phone = String(req.body?.phone || '').trim().replace(/\D/g, '');
+  const apt = await db.getAppointmentById(req.params.id);
+  if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
+
+  const aptPhone = String(apt.clientPhone || '').replace(/\D/g, '');
+  if (!phone || aptPhone !== phone) {
+    return res.status(403).json({ error: 'O número de telefone não corresponde ao agendamento.' });
+  }
+  if (apt.status === 'cancelled' || apt.status === 'completed') {
+    return res.status(400).json({ error: 'Este agendamento não pode mais ser cancelado.' });
+  }
+  if (apt.paymentStatus === 'paid' && apt.paymentMethod !== 'in_person') {
+    return res.status(400).json({ error: 'Este horário já foi pago online via Pix. Para cancelar e solicitar estorno, fale diretamente com o Leonardo pelo WhatsApp.' });
+  }
+
+  const hoursLeft = (slotMoment(apt.date, apt.time).getTime() - Date.now()) / 3600000;
+  if (hoursLeft < 2) {
+    return res.status(400).json({ error: 'Cancelamento pelo app só é permitido com mais de 2 horas de antecedência. Para horários próximos, chame o Leonardo no WhatsApp.' });
+  }
+
+  const updated = await db.updateAppointment(apt.id, { status: 'cancelled' });
+  await db.addAuditLog('APPOINTMENT_CANCELLED', `Agendamento ${apt.id} cancelado pelo cliente via telefone`, undefined, apt.clientName, req.ip);
+  return res.json({ appointment: updated });
+}));
+
 // ----- Agenda do barbeiro -----
 app.get('/api/admin/appointments', authenticateToken, requireBarberAdmin, h(async (req, res) => {
   const from = isValidDate(req.query.from) ? req.query.from : todayBR();
@@ -453,7 +506,7 @@ function siteUrl(req: Request): string {
 }
 
 async function mp(path: string, init: { method?: string; body?: string } = {}): Promise<any> {
-  const token = process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MP_ACCESS_TOKEN;
+  const token = process.env.MP_ACCESS_TOKEN;
   if (!token) throw new Error('Pagamento online não configurado (MP_ACCESS_TOKEN ausente).');
   const r = await fetch(`${MP_API}${path}`, {
     method: init.method || 'GET',
@@ -522,10 +575,14 @@ app.post('/api/payments/checkout', h(async (req, res) => {
   const expiresAt = new Date(apt.createdAt).getTime() + HOLD_MINUTES * 60000;
   const expirationDateTo = new Date(expiresAt - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
 
-  const excluded =
-    apt.paymentMethod === 'pix'
-      ? [{ id: 'credit_card' }, { id: 'debit_card' }, { id: 'prepaid_card' }, { id: 'ticket' }, { id: 'atm' }]
-      : [{ id: 'ticket' }, { id: 'atm' }, { id: 'bank_transfer' }];
+  // Apenas Pix permitido no Mercado Pago (exclui cartões de crédito/débito, pré-pago, boleto e atm)
+  const excluded = [
+    { id: 'credit_card' },
+    { id: 'debit_card' },
+    { id: 'prepaid_card' },
+    { id: 'ticket' },
+    { id: 'atm' },
+  ];
 
   const pref = await mp('/checkout/preferences', {
     method: 'POST',
@@ -542,7 +599,7 @@ app.post('/api/payments/checkout', h(async (req, res) => {
       notification_url: `${base}/api/payments/webhook`,
       expires: true,
       expiration_date_to: expirationDateTo,
-      payment_methods: { excluded_payment_types: excluded, installments: apt.paymentMethod === 'card' ? 3 : 1 },
+      payment_methods: { excluded_payment_types: excluded, installments: 1 },
     }),
   });
 
