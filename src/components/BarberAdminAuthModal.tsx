@@ -241,6 +241,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
 
             {/* Alternar Visualização do QR Code do Authenticator */}
             <div className="pt-2 border-t border-neutral-800 text-center">
+              {qrCodeDataUrl && (
               <button
                 type="button"
                 onClick={() => setShowQRGuide(!showQRGuide)}
@@ -249,6 +250,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                 <QrCode className="w-3.5 h-3.5" />
                 <span>{showQRGuide ? 'Ocultar QR Code' : 'Escanear QR Code no Celular / Chave'}</span>
               </button>
+              )}
 
               {showQRGuide && qrCodeDataUrl && (
                 <div className="mt-3 p-4 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3 animate-fade-in text-center">
@@ -262,9 +264,6 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                   />
                   <div className="text-[10px] text-neutral-400">
                     Chave manual: <code className="text-amber-400 font-mono font-bold">{secret}</code>
-                  </div>
-                  <div className="text-[10px] text-emerald-400/90 font-medium bg-emerald-950/40 p-2 rounded-lg border border-emerald-900/40">
-                    💡 Código mestre de contingência para teste rápido: <strong>777888</strong>
                   </div>
                 </div>
               )}

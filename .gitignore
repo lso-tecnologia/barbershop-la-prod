@@ -1,6 +1,10 @@
 node_modules/
+dist/
+.vercel/
 .next/
-.env*.local
 .env
+.env.*
+!.env.example
 *.pem
 npm-debug.log*
+barbershop_db.json

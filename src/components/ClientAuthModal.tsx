@@ -326,10 +326,6 @@ export const ClientAuthModal: React.FC<ClientAuthModalProps> = ({
                 >
                   {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Entrar na Conta</span>}
                 </button>
-
-                <p className="text-[11px] text-neutral-500 text-center">
-                  💡 Conta de teste demo: <strong>carlos.cliente@gmail.com</strong> (Senha: <strong>Cliente@123</strong>)
-                </p>
               </form>
             )}
 

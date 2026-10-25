@@ -2,6 +2,19 @@ import { UserAccount, ServiceItem, PromoPackage, NoticeData } from '../types/bar
 
 const API_BASE = '/api';
 
+// Lê a resposta com segurança: se o servidor devolver HTML (404/erro da Vercel),
+// mostra uma mensagem clara em vez de "Unexpected token ... is not valid JSON".
+async function parseJson(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(
+      `Servidor indisponível (HTTP ${res.status}). Verifique se o backend /api está publicado e configurado na Vercel.`
+    );
+  }
+}
+
 function getAuthHeader(): Record<string, string> {
   const token = localStorage.getItem('barbershop_auth_token');
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -15,7 +28,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro no cadastro.');
     if (json.token) localStorage.setItem('barbershop_auth_token', json.token);
     return json;
@@ -27,7 +40,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro no login.');
     if (json.token) localStorage.setItem('barbershop_auth_token', json.token);
     return json;
@@ -39,7 +52,7 @@ export const api = {
         headers: { ...getAuthHeader() },
       });
       if (!res.ok) return null;
-      const json = await res.json();
+      const json = await parseJson(res);
       return json.user;
     } catch {
       return null;
@@ -60,7 +73,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro ao solicitar recuperação.');
     return json;
   },
@@ -71,7 +84,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro ao redefinir senha.');
     return json;
   },
@@ -83,7 +96,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Credenciais de administrador incorretas.');
     return json;
   },
@@ -94,7 +107,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Código 2FA incorreto.');
     if (json.token) localStorage.setItem('barbershop_auth_token', json.token);
     return json;
@@ -102,7 +115,7 @@ export const api = {
 
   async getBarber2FASetup() {
     const res = await fetch(`${API_BASE}/auth/barber/2fa-setup`);
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro ao carregar dados do 2FA.');
     return json;
   },
@@ -110,7 +123,7 @@ export const api = {
   // --- CONFIGURAÇÕES & STATUS ---
   async getSettings() {
     const res = await fetch(`${API_BASE}/settings`);
-    return await res.json();
+    return await parseJson(res);
   },
 
   async toggleOpenStatus() {
@@ -118,7 +131,7 @@ export const api = {
       method: 'POST',
       headers: { ...getAuthHeader() },
     });
-    const json = await res.json();
+    const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Não autorizado a alterar status da barbearia.');
     return json;
   },
