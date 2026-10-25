@@ -21,8 +21,8 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
   isOpenStatus,
 }) => {
   const [step, setStep] = useState<'credentials' | '2fa' | 'authenticated'>('credentials');
-  const [email, setEmail] = useState('Leo.arruda226@gmail.com');
-  const [password, setPassword] = useState('Leonardo@2026');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [code, setCode] = useState('');
   const [tempToken, setTempToken] = useState('');
@@ -44,6 +44,8 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
         setStep('authenticated');
       } else {
         setStep('credentials');
+        setEmail('');
+        setPassword('');
         setCode('');
         setErrorMessage('');
       }
@@ -156,6 +158,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
               <input
                 type="email"
                 required
+                placeholder="seu.email@admin.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none"
@@ -168,6 +171,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
+                  placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none pr-10"
@@ -189,12 +193,6 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
             >
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Avançar para 2FA</span>}
             </button>
-
-            <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 p-3 text-[11px] text-neutral-400 space-y-1">
-              <p>🔑 <strong>Credenciais do Leonardo Arruda:</strong></p>
-              <p>E-mail: <code className="text-amber-400">Leo.arruda226@gmail.com</code></p>
-              <p>Senha: <code className="text-amber-400">Leonardo@2026</code></p>
-            </div>
           </form>
         )}
 
@@ -322,10 +320,6 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                 <span>Alternar Status (Aberta ↔ Fechada)</span>
               </button>
             </div>
-
-            <p className="text-[11px] text-neutral-400">
-              Na <strong>Etapa 4</strong>, este painel terá a agenda diária/semanal completa, gerenciamento de preços, bloqueio de horários e envio de avisos.
-            </p>
 
             <button
               onClick={onClose}
