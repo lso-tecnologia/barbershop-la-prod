@@ -142,12 +142,19 @@ export default function App() {
       }
     }).catch(() => {});
 
-    // 3. Busca os serviços dinâmicos do backend (/api/services)
+   // Busca os serviços dinâmicos do backend (/api/services)
     fetch('/api/services')
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          setServices(data);
+          // Normaliza os campos para garantir que o name e price venham numéricos e válidos
+          const formattedServices = data.map((item) => ({
+            ...item,
+            name: item.name || item.title || 'Serviço',
+            price: Number(item.price || 0),
+            durationMinutes: Number(item.durationMinutes || item.duration_minutes || 60),
+          }));
+          setServices(formattedServices);
         }
       })
       .catch((err) => console.error('Erro ao buscar serviços do servidor:', err));
