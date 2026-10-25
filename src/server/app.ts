@@ -278,6 +278,20 @@ app.post('/api/settings/toggle-open', authenticateToken, requireBarberAdmin, h(a
 }));
 
 app.get('/api/services', h(async (_req, res) => res.json(await db.getServices())));
+app.post('/api/admin/services', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const { id, name, description = '', price, durationMinutes = 60, isPopular = false } = req.body || {};
+  if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Informe o nome do serviço.' });
+  if (!Number.isFinite(Number(price)) || Number(price) < 0) return res.status(400).json({ error: 'Informe um preço válido.' });
+  if (!Number.isFinite(Number(durationMinutes)) || Number(durationMinutes) < 1) return res.status(400).json({ error: 'Informe uma duração válida.' });
+  await db.upsertService({ id: typeof id === 'string' ? id : undefined, name, description: String(description), price: Number(price), durationMinutes: Number(durationMinutes), duration: `${Number(durationMinutes)} min`, isPopular: !!isPopular });
+  await db.addAuditLog('SERVICE_UPSERT', `Serviço atualizado: ${name.trim()}`, req.user!.id, req.user!.name, req.ip);
+  return res.json({ services: await db.getServices() });
+}));
+app.delete('/api/admin/services/:id', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  await db.deleteService(req.params.id);
+  await db.addAuditLog('SERVICE_DEACTIVATED', `Serviço desativado: ${req.params.id}`, req.user!.id, req.user!.name, req.ip);
+  return res.json({ services: await db.getServices() });
+}));
 app.get('/api/packages', h(async (_req, res) => res.json(await db.getPackages())));
 app.get('/api/notices/active', h(async (_req, res) => res.json(await db.getActiveNotice())));
 

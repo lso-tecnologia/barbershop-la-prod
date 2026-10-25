@@ -214,48 +214,48 @@ export const db = {
   },
 
   async getServices(): Promise<ServiceRow[]> {
-    const { data, error } = await client().from('services').select('*');
+    const { data, error } = await client().from('services').select('*').eq('is_active', true).order('display_order', { ascending: true });
     if (error) fail('getServices', error);
-    return (data ?? []).map((r: any) => ({
-      id: r.id,
-      name: r.name || r.title || 'Serviço',
-      title: r.title || r.name || 'Serviço',
-      description: r.description || '',
-      price: Number(r.price || 0),
-      durationMinutes: Number(r.duration_minutes || 60),
-      duration: r.duration || '60 min',
-      isPopular: !!r.is_popular,
-      image: r.image || undefined,
-    }));
+    return (data ?? []).map((r: any) => {
+      const d = r.data ?? {};
+      return {
+        id: r.id,
+        name: d.name || d.title || 'Serviço',
+        title: d.title || d.name || 'Serviço',
+        description: d.description || '',
+        price: Number(d.price ?? (Number(d.priceCents ?? 0) / 100)),
+        durationMinutes: Number(d.durationMinutes ?? 60),
+        duration: d.duration || `${Number(d.durationMinutes ?? 60)} min`,
+        isPopular: !!(d.isPopular ?? d.isFeatured),
+        image: d.image || undefined,
+      };
+    });
   },
 
-  // --- GESTÃO DE SERVIÇOS PELO ADMIN ---
   async upsertService(service: {
-    id?: string;
-    name: string;
-    description: string;
-    price: number;
-    durationMinutes: number;
-    duration: string;
-    isPopular: boolean;
+    id?: string; name: string; description: string; price: number;
+    durationMinutes: number; duration: string; isPopular: boolean;
   }): Promise<void> {
     const serviceId = service.id || 'srv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const { data: existing } = await client().from('services').select('display_order').eq('id', serviceId).maybeSingle();
     const row = {
       id: serviceId,
-      name: service.name,
-      title: service.name,
-      description: service.description,
-      price: service.price,
-      duration_minutes: service.durationMinutes,
-      duration: service.duration,
-      is_popular: service.isPopular,
+      data: {
+        id: serviceId, name: service.name.trim(), title: service.name.trim(),
+        description: service.description.trim(), priceCents: Math.round(service.price * 100),
+        durationMinutes: service.durationMinutes, isPopular: service.isPopular,
+        isActive: true, displayOrder: existing?.display_order ?? 99,
+        updatedAt: new Date().toISOString(),
+      },
+      is_active: true,
+      display_order: existing?.display_order ?? 99,
     };
     const { error } = await client().from('services').upsert(row);
     if (error) fail('upsertService', error);
   },
 
   async deleteService(id: string): Promise<void> {
-    const { error } = await client().from('services').delete().eq('id', id);
+    const { error } = await client().from('services').update({ is_active: false }).eq('id', id);
     if (error) fail('deleteService', error);
   },
 

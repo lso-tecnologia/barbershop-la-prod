@@ -121,6 +121,22 @@ export const api = {
   },
 
   // --- CONFIGURAÇÕES & STATUS ---
+  async adminSaveService(data: { id?: string; name: string; description: string; price: number; durationMinutes: number; isPopular: boolean }) {
+    const res = await fetch(`${API_BASE}/admin/services`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify(data),
+    });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao salvar serviço.');
+    return json.services || [];
+  },
+
+  async adminDeleteService(id: string) {
+    const res = await fetch(`${API_BASE}/admin/services/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { ...getAuthHeader() } });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao desativar serviço.');
+    return json.services || [];
+  },
+
   async getSettings() {
     const res = await fetch(`${API_BASE}/settings`);
     return await parseJson(res);

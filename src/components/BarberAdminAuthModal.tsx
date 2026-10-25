@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Lock, ShieldAlert, KeyRound, CheckCircle2, QrCode, Loader2, Power, Eye, EyeOff } from 'lucide-react';
+import { X, Lock, ShieldAlert, KeyRound, CheckCircle2, QrCode, Loader2, Power, Eye, EyeOff, Scissors, Plus, Pencil, Trash2, Save } from 'lucide-react';
 import { UserAccount } from '../types/barbershop';
 import { api } from '../services/api';
 
@@ -37,6 +37,16 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [showServiceManager, setShowServiceManager] = useState(false);
+  const [managedServices, setManagedServices] = useState<any[]>([]);
+  const [serviceLoading, setServiceLoading] = useState(false);
+  const [serviceSaving, setServiceSaving] = useState(false);
+  const [editingServiceId, setEditingServiceId] = useState<string | undefined>();
+  const [serviceName, setServiceName] = useState('');
+  const [serviceDescription, setServiceDescription] = useState('');
+  const [servicePrice, setServicePrice] = useState('');
+  const [serviceDuration, setServiceDuration] = useState('60');
+  const [servicePopular, setServicePopular] = useState(false);
 
   const isAlreadyAdmin = currentUser && currentUser.role === 'barber_admin';
 
@@ -96,6 +106,52 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const loadManagedServices = async () => {
+    setServiceLoading(true);
+    try {
+      const res = await fetch('/api/services');
+      if (!res.ok) throw new Error('Não foi possível carregar os serviços.');
+      setManagedServices(await res.json());
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao carregar serviços.');
+    } finally { setServiceLoading(false); }
+  };
+
+  const resetServiceForm = () => {
+    setEditingServiceId(undefined); setServiceName(''); setServiceDescription('');
+    setServicePrice(''); setServiceDuration('60'); setServicePopular(false);
+  };
+
+  const startEditService = (service: any) => {
+    setEditingServiceId(service.id); setServiceName(service.name || service.title || '');
+    setServiceDescription(service.description || ''); setServicePrice(String(service.price ?? 0));
+    setServiceDuration(String(service.durationMinutes || 60)); setServicePopular(!!service.isPopular);
+  };
+
+  const handleSaveService = async (e: React.FormEvent) => {
+    e.preventDefault(); setServiceSaving(true); setErrorMessage(''); setSuccessMessage('');
+    try {
+      const services = await api.adminSaveService({
+        id: editingServiceId, name: serviceName, description: serviceDescription,
+        price: Number(servicePrice), durationMinutes: Number(serviceDuration), isPopular: servicePopular,
+      });
+      setManagedServices(services); resetServiceForm(); setSuccessMessage('Serviço salvo com sucesso.');
+    } catch (err: any) { setErrorMessage(err.message || 'Erro ao salvar serviço.'); }
+    finally { setServiceSaving(false); }
+  };
+
+  const handleDeleteService = async (service: any) => {
+    if (!window.confirm(`Desativar o serviço "${service.name}"? Ele deixará de aparecer para os clientes.`)) return;
+    setServiceSaving(true); setErrorMessage('');
+    try {
+      const services = await api.adminDeleteService(service.id);
+      setManagedServices(services);
+      if (editingServiceId === service.id) resetServiceForm();
+      setSuccessMessage('Serviço desativado.');
+    } catch (err: any) { setErrorMessage(err.message || 'Erro ao desativar serviço.'); }
+    finally { setServiceSaving(false); }
   };
 
   const handleToggleOpen = async () => {
@@ -330,6 +386,55 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
               >
                 📅 Abrir Agenda de Clientes
               </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => { const next = !showServiceManager; setShowServiceManager(next); if (next) void loadManagedServices(); }}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900 py-2.5 text-xs font-black uppercase text-neutral-200 hover:border-amber-500 hover:text-amber-300"
+            >
+              <Scissors className="w-4 h-4 text-amber-400" /> Gerenciar Serviços e Preços
+            </button>
+
+            {showServiceManager && (
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-900/80 p-4 space-y-4 text-left">
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-wider text-white">Serviços da barbearia</h4>
+                  <p className="mt-1 text-[11px] text-neutral-400">Alterações salvas no banco e exibidas para os clientes.</p>
+                </div>
+                {serviceLoading ? <div className="py-4 text-center text-xs text-neutral-400"><Loader2 className="inline w-4 h-4 animate-spin mr-2" />Carregando serviços...</div> : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {managedServices.map((service) => (
+                      <div key={service.id} className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-bold text-white">{service.name}</p>
+                          <p className="text-[11px] text-amber-400">{Number(service.price) === 0 ? 'À combinar' : `R$ ${Number(service.price).toFixed(2).replace('.', ',')}`} · {service.durationMinutes || 60} min</p>
+                        </div>
+                        <button type="button" title="Editar serviço" onClick={() => startEditService(service)} className="rounded-lg p-2 text-neutral-300 hover:bg-neutral-800 hover:text-amber-300"><Pencil className="w-4 h-4" /></button>
+                        <button type="button" title="Desativar serviço" disabled={serviceSaving} onClick={() => void handleDeleteService(service)} className="rounded-lg p-2 text-rose-400 hover:bg-rose-950/40 disabled:opacity-50"><Trash2 className="w-4 h-4" /></button>
+                      </div>
+                    ))}
+                    {!managedServices.length && <p className="text-xs text-neutral-500">Nenhum serviço cadastrado.</p>}
+                  </div>
+                )}
+                <form onSubmit={handleSaveService} className="space-y-3 border-t border-neutral-800 pt-4">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-xs font-bold text-white">{editingServiceId ? 'Editar serviço' : 'Adicionar serviço'}</h5>
+                    {editingServiceId && <button type="button" onClick={resetServiceForm} className="text-[11px] text-neutral-400 hover:text-white">Cancelar edição</button>}
+                  </div>
+                  <input required value={serviceName} onChange={e => setServiceName(e.target.value)} placeholder="Nome do serviço" className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                  <textarea value={serviceDescription} onChange={e => setServiceDescription(e.target.value)} placeholder="Descrição (opcional)" rows={2} className="w-full resize-y rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-white outline-none focus:border-amber-500" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[11px] text-neutral-400">Preço (R$)<input required type="number" min="0" step="0.01" value={servicePrice} onChange={e => setServicePrice(e.target.value)} placeholder="35,00" className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-white outline-none focus:border-amber-500" /></label>
+                    <label className="text-[11px] text-neutral-400">Duração (min)<input required type="number" min="1" step="1" value={serviceDuration} onChange={e => setServiceDuration(e.target.value)} className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-white outline-none focus:border-amber-500" /></label>
+                  </div>
+                  <label className="flex items-center gap-2 text-[11px] text-neutral-300"><input type="checkbox" checked={servicePopular} onChange={e => setServicePopular(e.target.checked)} className="accent-amber-500" /> Marcar como mais pedido</label>
+                  <button type="submit" disabled={serviceSaving} className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 py-2.5 text-xs font-black uppercase text-black hover:bg-amber-400 disabled:opacity-50">
+                    {serviceSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : editingServiceId ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                    {editingServiceId ? 'Salvar alterações' : 'Adicionar serviço'}
+                  </button>
+                </form>
+              </div>
             )}
 
             <button
