@@ -1,5 +1,5 @@
 import React from 'react';
-import { Scissors, Calendar, MapPin, ChevronDown, Sparkles, Shield, Star } from 'lucide-react';
+import { Scissors, Calendar, MapPin, ChevronDown, Sparkles } from 'lucide-react';
 import { OpenStatusBadge } from './OpenStatusBadge';
 
 interface HeroSectionProps {
@@ -10,7 +10,6 @@ interface HeroSectionProps {
 
 export const HeroSection: React.FC<HeroSectionProps> = ({
   isOpen,
-  onToggleDemoStatus,
   onBookNow,
 }) => {
   return (
@@ -31,11 +30,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
       <div className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-20 text-center space-y-6 sm:space-y-8 animate-fade-in">
         {/* Badge de Aberto/Fechado + Localização */}
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <OpenStatusBadge
-            isOpen={isOpen}
-            onToggleDemo={onToggleDemoStatus}
-            showAdminToggle={true}
-          />
+          <OpenStatusBadge isOpen={isOpen} />
           <div className="inline-flex items-center gap-1.5 rounded-full border border-neutral-800 bg-black/60 px-3.5 py-1.5 text-xs text-neutral-300 backdrop-blur-md">
             <MapPin className="w-3.5 h-3.5 text-amber-400" />
             <span>Rua Vera, 247 — Barueri/SP</span>
