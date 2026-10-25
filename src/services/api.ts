@@ -1,4 +1,4 @@
-import { UserAccount, ServiceItem, PromoPackage, NoticeData } from '../types/barbershop';
+import { UserAccount, ServiceItem, PromoPackage, NoticeData, AppointmentRecord } from '../types/barbershop';
 
 const API_BASE = '/api';
 
@@ -134,5 +134,59 @@ export const api = {
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Não autorizado a alterar status da barbearia.');
     return json;
+  },
+
+  // --- AGENDAMENTOS ---
+  async getTakenTimes(date: string): Promise<string[]> {
+    const res = await fetch(`${API_BASE}/appointments/taken?date=${encodeURIComponent(date)}`);
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar horários.');
+    return json.taken || [];
+  },
+
+  async createAppointment(data: Omit<AppointmentRecord, 'id' | 'status' | 'paymentStatus' | 'createdAt'>): Promise<AppointmentRecord> {
+    const res = await fetch(`${API_BASE}/appointments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(data),
+    });
+    const json = await parseJson(res);
+    if (!res.ok) throw Object.assign(new Error(json.error || 'Erro ao criar agendamento.'), { status: res.status });
+    return json.appointment;
+  },
+
+  async getMyAppointments(): Promise<AppointmentRecord[]> {
+    const res = await fetch(`${API_BASE}/appointments/mine`, { headers: { ...getAuthHeader() } });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar agendamentos.');
+    return json.appointments || [];
+  },
+
+  async cancelAppointment(id: string): Promise<AppointmentRecord> {
+    const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}/cancel`, {
+      method: 'PATCH',
+      headers: { ...getAuthHeader() },
+    });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao cancelar.');
+    return json.appointment;
+  },
+
+  async adminListAppointments(from: string, to: string): Promise<AppointmentRecord[]> {
+    const res = await fetch(`${API_BASE}/admin/appointments?from=${from}&to=${to}`, { headers: { ...getAuthHeader() } });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar a agenda.');
+    return json.appointments || [];
+  },
+
+  async adminUpdateAppointment(id: string, patch: { status?: string; paymentStatus?: string }): Promise<AppointmentRecord> {
+    const res = await fetch(`${API_BASE}/admin/appointments/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(patch),
+    });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao atualizar.');
+    return json.appointment;
   },
 };

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Calendar, Clock, Scissors, AlertTriangle, MessageCircle, CheckCircle2, Ban, Lock, User } from 'lucide-react';
 import { UserAccount, AppointmentRecord } from '../types/barbershop';
+import { api } from '../services/api';
 
 interface MyAppointmentsModalProps {
   isOpen: boolean;
@@ -19,20 +20,21 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
 }) => {
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
 
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
   useEffect(() => {
     if (isOpen && currentUser) {
-      try {
-        const stored: AppointmentRecord[] = JSON.parse(localStorage.getItem('barbershop_client_appointments') || '[]');
-        // Filtra estritamente os agendamentos pertencentes ao cliente autenticado
-        const myAppointments = stored.filter((apt) => {
-          const emailMatch = apt.clientEmail && currentUser.email && apt.clientEmail.toLowerCase() === currentUser.email.toLowerCase();
-          const phoneMatch = apt.clientPhone && currentUser.phone && apt.clientPhone.replace(/\D/g, '') === currentUser.phone.replace(/\D/g, '');
-          return emailMatch || phoneMatch;
-        });
-        setAppointments(myAppointments);
-      } catch {
-        setAppointments([]);
-      }
+      setIsLoading(true);
+      setLoadError('');
+      api
+        .getMyAppointments()
+        .then(setAppointments)
+        .catch((err) => {
+          setAppointments([]);
+          setLoadError(err.message || 'Não foi possível carregar seus agendamentos.');
+        })
+        .finally(() => setIsLoading(false));
     } else {
       setAppointments([]);
     }
@@ -57,17 +59,12 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
     }
   };
 
-  const handleCancelAppointment = (id: string) => {
-    const updated = appointments.map((apt) =>
-      apt.id === id ? { ...apt, status: 'cancelled' as const } : apt
-    );
-    setAppointments(updated);
+  const handleCancelAppointment = async (id: string) => {
     try {
-      const allStored: AppointmentRecord[] = JSON.parse(localStorage.getItem('barbershop_client_appointments') || '[]');
-      const allUpdated = allStored.map((apt) => (apt.id === id ? { ...apt, status: 'cancelled' as const } : apt));
-      localStorage.setItem('barbershop_client_appointments', JSON.stringify(allUpdated));
-    } catch {
-      // ignore
+      const updated = await api.cancelAppointment(id);
+      setAppointments((prev) => prev.map((apt) => (apt.id === id ? updated : apt)));
+    } catch (err: any) {
+      setLoadError(err.message || 'Não foi possível cancelar.');
     }
   };
 
@@ -128,6 +125,10 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
               </button>
             </div>
           </div>
+        ) : isLoading ? (
+          <p className="text-center text-xs text-neutral-400 py-10">Carregando seus agendamentos...</p>
+        ) : loadError && appointments.length === 0 ? (
+          <p className="text-center text-xs text-rose-300 py-10">{loadError}</p>
         ) : appointments.length === 0 ? (
           <div className="text-center py-10 space-y-4">
             <Scissors className="w-12 h-12 text-neutral-600 mx-auto" />

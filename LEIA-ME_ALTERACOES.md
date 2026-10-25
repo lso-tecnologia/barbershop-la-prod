@@ -70,13 +70,37 @@ Crie (para Production, Preview e Development):
 ## 4. ⚠️ Segurança: o que já vazou
 O repositório continha a senha antiga do admin (`Leonardo@2026`, escrita em comentário e no seed), o segredo 2FA antigo, o hash das senhas e o JWT secret padrão. **Considere todos comprometidos**: por isso o Passo D cria senha e 2FA novos. Se o repositório for público, deixe-o **privado**. Se usa essa mesma senha em outro lugar, troque.
 
-## 5. Pendências (não feitas)
-- **Não consegui rodar `npm install`/build aqui (sem internet)**: o código passou em checagem de sintaxe, mas **não foi testado em execução**. Se o deploy falhar, copie o log do erro da Vercel (Deployments → build/Function logs) e envie.
-- **Agendamentos ainda ficam no `localStorage` do celular** (`BookingModal.tsx`, `MyAppointmentsModal.tsx`): não vão para o Supabase, o barbeiro não os vê. Próxima etapa: criar tabela `appointments` + rotas `/api/appointments` com validação de horário duplicado.
-- **Recuperação de senha de cliente não envia e-mail.** Integrar Resend/SendGrid e enviar o código; até lá use o WhatsApp do barbeiro para casos de senha perdida.
-- Serviços/pacotes no front estão fixos em `App.tsx`; existe `/api/services` e `/api/packages` prontos para o front passar a consumir.
-- Pagamentos (Pix/cartão) aparecem no plano, mas não estão implementados.
-- Possíveis problemas de build para checar: se a Vercel reclamar de import em `api/index.ts`, os imports internos usam `.js` (padrão ESM); me envie o log.
+## 5. FASE 2 — Agendamentos no Supabase (feito)
+
+**Novo SQL (rodar UMA vez, não apaga nada):** `supabase/appointments.sql`
+→ Supabase → SQL Editor → New query → cole → Run. Cria a tabela `appointments` com trava contra dois agendamentos no mesmo horário.
+
+**O que mudou:**
+| Arquivo | Mudança |
+|---|---|
+| `src/server/app.ts` | Rotas: `GET /api/appointments/taken`, `POST /api/appointments`, `GET /api/appointments/mine`, `PATCH /api/appointments/:id/cancel`, `GET /api/admin/appointments`, `PATCH /api/admin/appointments/:id` |
+| `src/server/db.ts` | Funções de agendamento no Supabase |
+| `BookingModal.tsx` | Salva no servidor; horários ocupados ficam bloqueados ("Ocupado"); horários passados de hoje bloqueados; corrigido bug da data de "hoje" (usava UTC) |
+| `MyAppointmentsModal.tsx` | Lista e cancela pelo servidor (regra das 2h agora valida no servidor também) |
+| `AdminAgendaModal.tsx` (novo) | Agenda do barbeiro: ver por dia, WhatsApp do cliente, concluir/marcar pago/cancelar |
+| `BarberAdminAuthModal.tsx` | Botão "Abrir Agenda de Clientes" |
+| `App.tsx` | Logout agora limpa também o token da sessão |
+
+**Regras validadas no servidor:** segunda fechada; domingo 09–13h; terça a sábado 09–18h; não aceita horário passado nem além de 90 dias; máx. 3 agendamentos ativos por telefone; Pix só vira "pago" quando o barbeiro marcar.
+
+**Como usar a agenda:** rodapé → acesso do barbeiro → login + 2FA → "Abrir Agenda de Clientes".
+
+### Recuperação de senha por e-mail (código pronto, falta configurar)
+Usa o Resend (resend.com). Na Vercel crie `RESEND_API_KEY` e `RESEND_FROM`. Para enviar a qualquer cliente é preciso **verificar um domínio seu** no Resend (sem domínio, só envia para o seu próprio e-mail). Sem essas variáveis o e-mail simplesmente não é enviado.
+Depois confirme que `ALLOW_PREVIEW_RESET_TOKEN` NÃO está `true` na Vercel.
+
+## 6. Pendências restantes
+- **Código ainda não foi executado/testado de ponta a ponta** (sem internet no ambiente onde foi escrito). Se o deploy ou algum fluxo falhar, envie o log da Vercel (Deployments → Functions/Build logs) ou um print.
+- Os serviços/pacotes do site ainda são fixos em `App.tsx`; o servidor guarda o **preço enviado pelo app** (limitado a R$ 0–2000). Próximo passo: o app buscar `/api/services` e `/api/packages` e o servidor calcular o preço sozinho.
+- Pagamento Pix/cartão online não existe (só "pagar no local"; Pix fica pendente até o barbeiro marcar pago).
+- Agendamentos antigos que estavam no `localStorage` do celular dos clientes não foram migrados (eram só locais).
+- Lembrete automático por WhatsApp/e-mail antes do horário.
+- Painel para o barbeiro editar serviços, preços e horários de funcionamento.
 
 ## 6. Prompt pronto para outra IA
-> Tenho um PWA de barbearia (React 19 + Vite + Tailwind 4) deployado na Vercel com Supabase. O backend é um Express em `src/server/app.ts` exportado como função serverless em `api/index.ts` (rewrite em `vercel.json`), e acessa o Supabase em `src/server/db.ts` com a service role key. Auth própria: bcrypt + JWT + TOTP (otplib). Leia `LEIA-ME_ALTERACOES.md`. Próximas tarefas: (1) validar o build/deploy na Vercel; (2) migrar agendamentos do localStorage para uma tabela `appointments` com constraint UNIQUE (data+horário) e rotas protegidas; (3) enviar e-mail de recuperação de senha; (4) painel do barbeiro para ver/confirmar/cancelar agendamentos.
+> Tenho um PWA de barbearia (React 19 + Vite + Tailwind 4) deployado na Vercel com Supabase. O backend é um Express em `src/server/app.ts` exportado como função serverless em `api/index.ts` (rewrite em `vercel.json`), e acessa o Supabase em `src/server/db.ts` com a service role key. Auth própria: bcrypt + JWT + TOTP (otplib). Leia `LEIA-ME_ALTERACOES.md`. Próximas tarefas: (1) validar o build/deploy na Vercel; (2) validar de ponta a ponta o fluxo de agendamentos (já implementado em `/api/appointments*` + `AdminAgendaModal`); (3) fazer o app consumir `/api/services` e `/api/packages` e calcular preço no servidor; (4) painel do barbeiro para editar serviços/horários; (5) lembretes por WhatsApp/e-mail.

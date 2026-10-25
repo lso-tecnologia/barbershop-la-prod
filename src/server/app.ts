@@ -13,6 +13,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const isProd = process.env.NODE_ENV === 'production';
 const JWT_SECRET = process.env.JWT_SECRET || (isProd ? '' : 'dev_only_secret_change_me');
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'leo.arruda226@gmail.com').toLowerCase();
@@ -76,6 +77,26 @@ function setSessionCookie(res: Response, token: string, days: number) {
   });
 }
 
+
+// Envio de e-mail via Resend (https://resend.com). Requer RESEND_API_KEY e RESEND_FROM.
+async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+  const key = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM;
+  if (!key || !from) return false;
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, subject, html }),
+    });
+    if (!r.ok) console.error('Resend falhou:', r.status, await r.text());
+    return r.ok;
+  } catch (err) {
+    console.error('Erro ao enviar e-mail:', err);
+    return false;
+  }
+}
+
 // ========== AUTENTICAÇÃO DO CLIENTE ==========
 
 app.post('/api/auth/register', h(async (req, res) => {
@@ -87,6 +108,9 @@ app.post('/api/auth/register', h(async (req, res) => {
     return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres.' });
   }
   const cleanEmail = String(email).trim().toLowerCase();
+  if (!/^[^\s@,()]+@[^\s@,()]+\.[^\s@,()]+$/.test(cleanEmail) || cleanEmail.length > 120) {
+    return res.status(400).json({ error: 'Informe um e-mail válido.' });
+  }
   if (await db.findUserByEmail(cleanEmail)) {
     return res.status(400).json({ error: 'Este e-mail já está cadastrado.' });
   }
@@ -210,7 +234,14 @@ app.post('/api/auth/forgot-password', h(async (req, res) => {
     const resetToken = crypto.randomBytes(4).toString('hex').toUpperCase();
     await db.createPasswordReset(user.email, resetToken);
     await db.addAuditLog('PASSWORD_RESET_REQUEST', `Redefinição solicitada para ${user.email}`, user.id, user.name, req.ip);
-    // TODO: enviar o código por e-mail (Resend/SendGrid). Até lá só aparece com a flag de teste.
+    await sendEmail(
+      user.email,
+      'Código para redefinir sua senha — BARBERSHOP L.A',
+      `<p>Olá, ${esc(user.name)}!</p><p>Seu código para redefinir a senha é:</p>` +
+        `<p style="font-size:24px;font-weight:bold;letter-spacing:3px">${resetToken}</p>` +
+        `<p>Ele vale por 15 minutos. Se não foi você, ignore este e-mail.</p>`
+    );
+    // Só para testes: devolve o código na resposta (nunca ative em produção)
     if (process.env.ALLOW_PREVIEW_RESET_TOKEN === 'true') response.previewToken = resetToken;
   }
   return res.json(response);
@@ -250,9 +281,134 @@ app.get('/api/services', h(async (_req, res) => res.json(await db.getServices())
 app.get('/api/packages', h(async (_req, res) => res.json(await db.getPackages())));
 app.get('/api/notices/active', h(async (_req, res) => res.json(await db.getActiveNotice())));
 
+// ========== AGENDAMENTOS ==========
+
+// Brasil (Brasília) = UTC-3 fixo, sem horário de verão desde 2019
+const slotMoment = (date: string, time: string) => new Date(`${date}T${time}:00-03:00`);
+const todayBR = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+
+function validSlotsFor(date: string): string[] {
+  const [y, m, d] = date.split('-').map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Dom, 1=Seg
+  if (dow === 1) return [];
+  if (dow === 0) return ['09:00', '10:00', '11:00', '12:00', '13:00'];
+  return ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00'];
+}
+
+// Se houver token válido, identifica o usuário; senão segue como visitante
+function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction) {
+  const authHeader = req.headers['authorization'];
+  const token = (authHeader && authHeader.split(' ')[1]) || req.cookies?.auth_token;
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      if (!decoded.is2FAPending) req.user = decoded;
+    } catch { /* visitante */ }
+  }
+  next();
+}
+
+const isValidDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
+
+// Horários já ocupados de um dia (sem dados pessoais)
+app.get('/api/appointments/taken', h(async (req, res) => {
+  const date = req.query.date;
+  if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+  return res.json({ date, taken: await db.getTakenTimes(date) });
+}));
+
+app.post('/api/appointments', optionalAuth, h(async (req, res) => {
+  const b = req.body || {};
+  const date = b.date, time = String(b.time || '');
+  if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
+
+  const slots = validSlotsFor(date);
+  if (!slots.length) return res.status(400).json({ error: 'A barbearia não abre às segundas-feiras.' });
+  if (!slots.includes(time)) return res.status(400).json({ error: 'Horário indisponível para este dia.' });
+
+  const when = slotMoment(date, time);
+  if (when.getTime() <= Date.now()) return res.status(400).json({ error: 'Este horário já passou. Escolha outro.' });
+  if (when.getTime() > Date.now() + 90 * 24 * 3600 * 1000) return res.status(400).json({ error: 'Agendamentos só até 90 dias à frente.' });
+
+  const clientName = String(b.clientName || '').trim().slice(0, 80);
+  const clientPhone = String(b.clientPhone || '').trim().slice(0, 20);
+  const itemName = String(b.itemName || '').trim().slice(0, 120);
+  if (!clientName || clientPhone.replace(/\D/g, '').length < 10 || !itemName) {
+    return res.status(400).json({ error: 'Preencha nome, WhatsApp e serviço.' });
+  }
+
+  // Anti-spam: no máximo 3 agendamentos ativos por telefone
+  if ((await db.countActiveByPhone(clientPhone, todayBR())) >= 3) {
+    return res.status(429).json({ error: 'Limite de 3 agendamentos ativos por telefone. Cancele um ou fale com o barbeiro.' });
+  }
+
+  const paymentMethod = ['pix', 'card', 'in_person'].includes(b.paymentMethod) ? b.paymentMethod : 'in_person';
+  const price = Math.min(Math.max(Number(b.price) || 0, 0), 2000);
+  const email = req.user
+    ? req.user.email
+    : String(b.clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`).trim().toLowerCase().slice(0, 120);
+
+  try {
+    const apt = await db.createAppointment({
+      userId: req.user?.id ?? null,
+      clientName, clientPhone, clientEmail: email, itemName,
+      itemType: b.itemType === 'package' ? 'package' : 'service',
+      price, date, time,
+      status: 'confirmed',
+      paymentMethod,
+      paymentStatus: 'pending', // Pix só vira "pago" quando o barbeiro confirmar
+    });
+    await db.addAuditLog('APPOINTMENT_CREATED', `${clientName} agendou ${itemName} em ${date} ${time}`, req.user?.id, clientName, req.ip);
+    return res.status(201).json({ appointment: apt });
+  } catch (err: any) {
+    if (err.message === 'SLOT_TAKEN') return res.status(409).json({ error: 'Esse horário acabou de ser ocupado. Escolha outro.' });
+    throw err;
+  }
+}));
+
+app.get('/api/appointments/mine', authenticateToken, h(async (req, res) => {
+  const list = await db.getAppointmentsForUser(req.user!.id, req.user!.email);
+  return res.json({ appointments: list });
+}));
+
+app.patch('/api/appointments/:id/cancel', authenticateToken, h(async (req, res) => {
+  const apt = await db.getAppointmentById(req.params.id);
+  if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
+
+  const isAdmin = req.user!.role === 'barber_admin';
+  const isOwner = apt.userId === req.user!.id || apt.clientEmail.toLowerCase() === req.user!.email.toLowerCase();
+  if (!isAdmin && !isOwner) return res.status(403).json({ error: 'Você não pode cancelar este agendamento.' });
+  if (apt.status === 'cancelled' || apt.status === 'completed') return res.status(400).json({ error: 'Este agendamento não pode mais ser cancelado.' });
+
+  if (!isAdmin) {
+    const hoursLeft = (slotMoment(apt.date, apt.time).getTime() - Date.now()) / 3600000;
+    if (hoursLeft < 2) return res.status(400).json({ error: 'Cancelamento só até 2h antes. Fale com o barbeiro pelo WhatsApp.' });
+  }
+  const updated = await db.updateAppointment(apt.id, { status: 'cancelled' });
+  await db.addAuditLog('APPOINTMENT_CANCELLED', `Agendamento ${apt.id} cancelado`, req.user!.id, req.user!.name, req.ip);
+  return res.json({ appointment: updated });
+}));
+
+// ----- Agenda do barbeiro -----
+app.get('/api/admin/appointments', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const from = isValidDate(req.query.from) ? req.query.from : todayBR();
+  const to = isValidDate(req.query.to) ? req.query.to : new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  return res.json({ appointments: await db.listAppointments(from, to) });
+}));
+
+app.patch('/api/admin/appointments/:id', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const { status, paymentStatus } = req.body || {};
+  if (status && !['pending', 'confirmed', 'completed', 'cancelled'].includes(status)) return res.status(400).json({ error: 'Status inválido.' });
+  if (paymentStatus && !['pending', 'paid'].includes(paymentStatus)) return res.status(400).json({ error: 'Status de pagamento inválido.' });
+  if (!status && !paymentStatus) return res.status(400).json({ error: 'Nada para atualizar.' });
+  const updated = await db.updateAppointment(req.params.id, { status, paymentStatus });
+  if (!updated) return res.status(404).json({ error: 'Agendamento não encontrado.' });
+  await db.addAuditLog('APPOINTMENT_UPDATED', `Agendamento ${updated.id}: ${status ?? ''} ${paymentStatus ?? ''}`.trim(), req.user!.id, req.user!.name, req.ip);
+  return res.json({ appointment: updated });
+}));
+
 // ========== SETUP ÚNICO DO ADMIN (protegido por SETUP_KEY) ==========
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 const page = (body: string) =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Setup</title>` +
   `<body style="font-family:sans-serif;background:#0a0a0a;color:#eee;max-width:440px;margin:40px auto;padding:0 16px">${body}</body>`;

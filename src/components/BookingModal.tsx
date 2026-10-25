@@ -21,6 +21,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { ServiceItem, PromoPackage, UserAccount, AppointmentRecord } from '../types/barbershop';
+import { api } from '../services/api';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -76,11 +77,24 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // Data padrão (Hoje)
   const todayStr = useMemo(() => {
     const now = new Date();
-    return now.toISOString().split('T')[0];
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    return `${now.getFullYear()}-${mm}-${dd}`;
   }, []);
 
   const [selectedDate, setSelectedDate] = useState<string>(todayStr);
   const [selectedSlot, setSelectedSlot] = useState<string>('');
+  const [takenTimes, setTakenTimes] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Busca no servidor os horários já ocupados do dia escolhido
+  const loadTakenTimes = (date: string) => {
+    if (!date) return;
+    api.getTakenTimes(date).then(setTakenTimes).catch(() => setTakenTimes([]));
+  };
+  useEffect(() => {
+    if (isOpen) loadTakenTimes(selectedDate);
+  }, [isOpen, selectedDate]);
 
   // Dados do formulário do cliente
   const [clientName, setClientName] = useState(currentUser?.name || '');
@@ -236,39 +250,36 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   };
 
   // Confirmar Agendamento Final (Passo 5)
-  const handleConfirmAppointment = () => {
-    if (!chosenItem) return;
-
-    const newAppointment: AppointmentRecord = {
-      id: 'apt_' + Date.now(),
-      clientName,
-      clientPhone,
-      clientEmail: clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`,
-      itemName: currentItemName,
-      itemType: isPackage ? 'package' : 'service',
-      price: currentItemPrice,
-      date: selectedDate,
-      time: selectedSlot,
-      status: 'confirmed',
-      paymentMethod,
-      paymentStatus: paymentMethod === 'pix' ? 'paid' : 'pending',
-      createdAt: new Date().toISOString(),
-    };
-
-    // Salva no LocalStorage para persistência da área do cliente
+  const handleConfirmAppointment = async () => {
+    if (!chosenItem || isSubmitting) return;
+    setFormError('');
+    setIsSubmitting(true);
     try {
-      const existing = JSON.parse(localStorage.getItem('barbershop_client_appointments') || '[]');
-      existing.unshift(newAppointment);
-      localStorage.setItem('barbershop_client_appointments', JSON.stringify(existing));
-    } catch {
-      // Ignora erro de JSON
+      const saved = await api.createAppointment({
+        clientName,
+        clientPhone,
+        clientEmail: clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`,
+        itemName: currentItemName,
+        itemType: isPackage ? 'package' : 'service',
+        price: currentItemPrice,
+        date: selectedDate,
+        time: selectedSlot,
+        paymentMethod,
+      });
+      setCreatedAppointment(saved);
+      if (onBookingConfirmed) onBookingConfirmed(saved);
+      setStep(5);
+    } catch (err: any) {
+      setFormError(err.message || 'Não foi possível confirmar o agendamento.');
+      if (err.status === 409) {
+        // Horário foi ocupado por outra pessoa: volta e atualiza a lista
+        setSelectedSlot('');
+        loadTakenTimes(selectedDate);
+        setStep(2);
+      }
+    } finally {
+      setIsSubmitting(false);
     }
-
-    setCreatedAppointment(newAppointment);
-    if (onBookingConfirmed) {
-      onBookingConfirmed(newAppointment);
-    }
-    setStep(5);
   };
 
   // Link para o WhatsApp após confirmação
@@ -536,20 +547,25 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                   {availableSlots.map((slot) => {
                     const isSelected = selectedSlot === slot;
+                    const isPast = selectedDate === todayStr && new Date(`${selectedDate}T${slot}:00`).getTime() <= Date.now();
+                    const isUnavailable = takenTimes.includes(slot) || isPast;
                     return (
                       <button
                         key={slot}
                         type="button"
+                        disabled={isUnavailable}
                         onClick={() => setSelectedSlot(slot)}
                         className={`py-2.5 px-2 rounded-xl text-xs font-bold transition-all flex flex-col items-center justify-center border ${
-                          isSelected
+                          isUnavailable
+                            ? 'border-neutral-900 bg-neutral-950 text-neutral-600 cursor-not-allowed line-through'
+                            : isSelected
                             ? 'border-amber-400 bg-gradient-to-r from-amber-500 to-amber-600 text-black shadow-lg shadow-amber-950/50 scale-102 font-black'
                             : 'border-neutral-800 bg-neutral-900 text-neutral-300 hover:border-amber-500/50 hover:text-white'
                         }`}
                       >
                         <span className="text-sm font-mono">{slot}</span>
                         <span className="text-[9px] uppercase tracking-wider opacity-75">
-                          {isSelected ? 'Escolhido' : 'Disponível'}
+                          {isUnavailable ? (isPast ? 'Encerrado' : 'Ocupado') : isSelected ? 'Escolhido' : 'Disponível'}
                         </span>
                       </button>
                     );
@@ -787,10 +803,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               <button
                 type="button"
                 onClick={handleConfirmAppointment}
+                disabled={isSubmitting}
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 py-3 text-xs font-black uppercase tracking-wider text-black shadow-lg hover:brightness-110 active:scale-98"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>Confirmar Agendamento</span>
+                <span>{isSubmitting ? 'Confirmando...' : 'Confirmar Agendamento'}</span>
               </button>
             </div>
           </div>

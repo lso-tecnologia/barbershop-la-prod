@@ -18,6 +18,7 @@ import { BookingModal } from './components/BookingModal';
 import { ClientAuthModal } from './components/ClientAuthModal';
 import { MyAppointmentsModal } from './components/MyAppointmentsModal';
 import { BarberAdminAuthModal } from './components/BarberAdminAuthModal';
+import { AdminAgendaModal } from './components/AdminAgendaModal';
 import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
 import { ServiceItem, PromoPackage, BarberProfile, NoticeData, UserAccount, AppointmentRecord } from './types/barbershop';
 import { api } from './services/api';
@@ -36,6 +37,7 @@ export default function App() {
   const [isMyAppointmentsOpen, setIsMyAppointmentsOpen] = useState(false);
   const [isBarberAdminModalOpen, setIsBarberAdminModalOpen] = useState(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
+  const [isAgendaOpen, setIsAgendaOpen] = useState(false);
 
   // Carrega usuário salvo e configurações do servidor ao iniciar
   useEffect(() => {
@@ -182,6 +184,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    api.logout();
     localStorage.removeItem('barbershop_logged_client');
     setCurrentUser(null);
   };
@@ -300,7 +303,14 @@ export default function App() {
           setIsOpen((prev) => !prev);
         }}
         isOpenStatus={isOpen}
+        onOpenAgenda={() => {
+          setIsBarberAdminModalOpen(false);
+          setIsAgendaOpen(true);
+        }}
       />
+
+      {/* Agenda do Barbeiro (somente admin autenticado; a API também valida) */}
+      <AdminAgendaModal isOpen={isAgendaOpen && currentUser?.role === 'barber_admin'} onClose={() => setIsAgendaOpen(false)} />
 
       {/* Modal de Privacidade e LGPD */}
       <PrivacyPolicyModal

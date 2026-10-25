@@ -10,6 +10,7 @@ interface BarberAdminAuthModalProps {
   onLoginSuccess: (user: UserAccount) => void;
   onToggleShopStatus?: () => void;
   isOpenStatus?: boolean;
+  onOpenAgenda?: () => void;
 }
 
 export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
@@ -19,6 +20,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
   onLoginSuccess,
   onToggleShopStatus,
   isOpenStatus,
+  onOpenAgenda,
 }) => {
   const [step, setStep] = useState<'credentials' | '2fa' | 'authenticated'>('credentials');
   const [email, setEmail] = useState('');
@@ -319,6 +321,16 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                 <span>Alternar Status (Aberta ↔ Fechada)</span>
               </button>
             </div>
+
+            {onOpenAgenda && (
+              <button
+                type="button"
+                onClick={onOpenAgenda}
+                className="w-full rounded-xl border border-amber-500/60 bg-amber-500/10 py-2.5 text-xs font-black uppercase text-amber-300 hover:bg-amber-500/20"
+              >
+                📅 Abrir Agenda de Clientes
+              </button>
+            )}
 
             <button
               onClick={onClose}

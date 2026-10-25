@@ -12,6 +12,43 @@ export interface UserRow {
   updatedAt: string;
 }
 
+
+export interface AppointmentRow {
+  id: string;
+  userId: string | null;
+  clientName: string;
+  clientPhone: string;
+  clientEmail: string;
+  itemName: string;
+  itemType: 'service' | 'package';
+  price: number;
+  date: string;
+  time: string;
+  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  paymentMethod: 'pix' | 'card' | 'in_person';
+  paymentStatus: 'pending' | 'paid';
+  createdAt: string;
+}
+
+function mapAppointment(r: any): AppointmentRow {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    clientName: r.client_name,
+    clientPhone: r.client_phone,
+    clientEmail: r.client_email,
+    itemName: r.item_name,
+    itemType: r.item_type,
+    price: Number(r.price),
+    date: r.date,
+    time: r.time,
+    status: r.status,
+    paymentMethod: r.payment_method,
+    paymentStatus: r.payment_status,
+    createdAt: r.created_at,
+  };
+}
+
 let _client: SupabaseClient | null = null;
 
 function client(): SupabaseClient {
@@ -176,6 +213,93 @@ export const db = {
     const { data, error } = await client().from('notices').select('data').eq('is_active', true).limit(1);
     if (error) fail('getActiveNotice', error);
     return data && data.length ? data[0].data : null;
+  },
+
+
+  // --- AGENDAMENTOS ---
+  async getTakenTimes(date: string): Promise<string[]> {
+    const { data, error } = await client()
+      .from('appointments')
+      .select('time')
+      .eq('date', date)
+      .in('status', ['pending', 'confirmed']);
+    if (error) fail('getTakenTimes', error);
+    return (data ?? []).map((r) => r.time);
+  },
+
+  async createAppointment(a: Omit<AppointmentRow, 'id' | 'createdAt'>): Promise<AppointmentRow> {
+    const row = {
+      id: 'apt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      user_id: a.userId,
+      client_name: a.clientName,
+      client_phone: a.clientPhone,
+      client_email: a.clientEmail,
+      item_name: a.itemName,
+      item_type: a.itemType,
+      price: a.price,
+      date: a.date,
+      time: a.time,
+      status: a.status,
+      payment_method: a.paymentMethod,
+      payment_status: a.paymentStatus,
+    };
+    const { data, error } = await client().from('appointments').insert(row).select('*').single();
+    if (error) {
+      if ((error as any).code === '23505') throw new Error('SLOT_TAKEN');
+      fail('createAppointment', error);
+    }
+    return mapAppointment(data);
+  },
+
+  async getAppointmentsForUser(userId: string, email: string): Promise<AppointmentRow[]> {
+    // Duas consultas separadas (não monta filtro com texto do usuário -> sem injeção)
+    const [byUser, byEmail] = await Promise.all([
+      client().from('appointments').select('*').eq('user_id', userId),
+      client().from('appointments').select('*').eq('client_email', email.toLowerCase()),
+    ]);
+    if (byUser.error) fail('getAppointmentsForUser', byUser.error);
+    if (byEmail.error) fail('getAppointmentsForUser', byEmail.error);
+    const map = new Map<string, AppointmentRow>();
+    for (const r of [...(byUser.data ?? []), ...(byEmail.data ?? [])]) map.set(r.id, mapAppointment(r));
+    return [...map.values()].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  },
+
+  async countActiveByPhone(phone: string, fromDate: string): Promise<number> {
+    const { count, error } = await client()
+      .from('appointments')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_phone', phone)
+      .gte('date', fromDate)
+      .in('status', ['pending', 'confirmed']);
+    if (error) fail('countActiveByPhone', error);
+    return count ?? 0;
+  },
+
+  async getAppointmentById(id: string): Promise<AppointmentRow | undefined> {
+    const { data, error } = await client().from('appointments').select('*').eq('id', id).maybeSingle();
+    if (error) fail('getAppointmentById', error);
+    return data ? mapAppointment(data) : undefined;
+  },
+
+  async listAppointments(from: string, to: string): Promise<AppointmentRow[]> {
+    const { data, error } = await client()
+      .from('appointments')
+      .select('*')
+      .gte('date', from)
+      .lte('date', to)
+      .order('date')
+      .order('time');
+    if (error) fail('listAppointments', error);
+    return (data ?? []).map(mapAppointment);
+  },
+
+  async updateAppointment(id: string, patch: { status?: string; paymentStatus?: string }): Promise<AppointmentRow | undefined> {
+    const upd: Record<string, string> = {};
+    if (patch.status) upd.status = patch.status;
+    if (patch.paymentStatus) upd.payment_status = patch.paymentStatus;
+    const { data, error } = await client().from('appointments').update(upd).eq('id', id).select('*').maybeSingle();
+    if (error) fail('updateAppointment', error);
+    return data ? mapAppointment(data) : undefined;
   },
 
   // --- AUDITORIA (nunca derruba a requisição se falhar) ---
