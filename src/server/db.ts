@@ -12,7 +12,6 @@ export interface UserRow {
   updatedAt: string;
 }
 
-
 export interface AppointmentRow {
   id: string;
   userId: string | null;
@@ -28,6 +27,28 @@ export interface AppointmentRow {
   paymentMethod: 'pix' | 'card' | 'in_person';
   paymentStatus: 'pending' | 'paid';
   createdAt: string;
+}
+
+export interface ServiceRow {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  price: number;
+  durationMinutes: number;
+  duration: string;
+  isPopular: boolean;
+  image?: string;
+}
+
+export interface PackageRow {
+  id: string;
+  title: string;
+  price: number;
+  economy: string;
+  description: string;
+  benefits: string[];
+  isFeatured: boolean;
 }
 
 function mapAppointment(r: any): AppointmentRow {
@@ -128,7 +149,7 @@ export const db = {
     return mapUser(data);
   },
 
-  // --- BLOQUEIO DE FORÇA BRUTA (persistido: funciona em serverless) ---
+  // --- BLOQUEIO DE FORÇA BRUTA ---
   async isIpLocked(ip: string): Promise<boolean> {
     const { data, error } = await client().from('login_attempts').select('*').eq('ip', ip).maybeSingle();
     if (error) fail('isIpLocked', error);
@@ -164,7 +185,6 @@ export const db = {
     if (!data || new Date(data.expires_at).getTime() < Date.now()) return false;
 
     const user = await db.findUserByEmail(data.email);
-    // Nunca permite redefinir a senha do administrador por este fluxo.
     if (!user || user.role !== 'client') return false;
 
     const { error: upErr } = await client()
@@ -193,20 +213,37 @@ export const db = {
     return next;
   },
 
-  async getServices(): Promise<any[]> {
-    const { data, error } = await client()
-      .from('services')
-      .select('data')
-      .eq('is_active', true)
-      .order('display_order');
+  async getServices(): Promise<ServiceRow[]> {
+    const { data, error } = await client().from('services').select('*');
     if (error) fail('getServices', error);
-    return (data ?? []).map((r) => r.data);
+    return (data ?? []).map((r: any) => ({
+      id: r.id,
+      name: r.name || r.title || 'Serviço',
+      title: r.title || r.name || 'Serviço',
+      description: r.description || '',
+      price: Number(r.price || 0),
+      durationMinutes: Number(r.duration_minutes || 60),
+      duration: r.duration || '60 min',
+      isPopular: !!r.is_popular,
+      image: r.image || undefined,
+    }));
   },
 
-  async getPackages(): Promise<any[]> {
-    const { data, error } = await client().from('packages').select('data').eq('is_active', true);
-    if (error) fail('getPackages', error);
-    return (data ?? []).map((r) => r.data);
+  async getPackages(): Promise<PackageRow[]> {
+    const { data, error } = await client().from('packages').select('*');
+    if (error) {
+      // Retorna vazio se a tabela de pacotes customizada não estiver ativa
+      return [];
+    }
+    return (data ?? []).map((r: any) => ({
+      id: r.id,
+      title: r.title || 'Pacote',
+      price: Number(r.price || 0),
+      economy: r.economy || '',
+      description: r.description || '',
+      benefits: Array.isArray(r.benefits) ? r.benefits : [],
+      isFeatured: !!r.is_featured,
+    }));
   },
 
   async getActiveNotice(): Promise<any | null> {
@@ -214,7 +251,6 @@ export const db = {
     if (error) fail('getActiveNotice', error);
     return data && data.length ? data[0].data : null;
   },
-
 
   // --- AGENDAMENTOS ---
   async getTakenTimes(date: string): Promise<string[]> {
@@ -252,7 +288,6 @@ export const db = {
   },
 
   async getAppointmentsForUser(userId: string, email: string): Promise<AppointmentRow[]> {
-    // Duas consultas separadas (não monta filtro com texto do usuário -> sem injeção)
     const [byUser, byEmail] = await Promise.all([
       client().from('appointments').select('*').eq('user_id', userId),
       client().from('appointments').select('*').eq('client_email', email.toLowerCase()),
@@ -302,7 +337,7 @@ export const db = {
     return data ? mapAppointment(data) : undefined;
   },
 
-  // --- AUDITORIA (nunca derruba a requisição se falhar) ---
+  // --- AUDITORIA ---
   async addAuditLog(action: string, details: string, userId?: string, userName?: string, ip?: string): Promise<void> {
     try {
       await client()
