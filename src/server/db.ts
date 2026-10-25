@@ -229,10 +229,39 @@ export const db = {
     }));
   },
 
+  // --- GESTÃO DE SERVIÇOS PELO ADMIN ---
+  async upsertService(service: {
+    id?: string;
+    name: string;
+    description: string;
+    price: number;
+    durationMinutes: number;
+    duration: string;
+    isPopular: boolean;
+  }): Promise<void> {
+    const serviceId = service.id || 'srv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const row = {
+      id: serviceId,
+      name: service.name,
+      title: service.name,
+      description: service.description,
+      price: service.price,
+      duration_minutes: service.durationMinutes,
+      duration: service.duration,
+      is_popular: service.isPopular,
+    };
+    const { error } = await client().from('services').upsert(row);
+    if (error) fail('upsertService', error);
+  },
+
+  async deleteService(id: string): Promise<void> {
+    const { error } = await client().from('services').delete().eq('id', id);
+    if (error) fail('deleteService', error);
+  },
+
   async getPackages(): Promise<PackageRow[]> {
     const { data, error } = await client().from('packages').select('*');
     if (error) {
-      // Retorna vazio se a tabela de pacotes customizada não estiver ativa
       return [];
     }
     return (data ?? []).map((r: any) => ({
