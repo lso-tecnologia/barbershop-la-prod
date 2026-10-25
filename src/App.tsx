@@ -30,41 +30,8 @@ export default function App() {
   // Usuário Cliente Autenticado
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
 
-  // Modais
-  const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
-  const [selectedServiceItem, setSelectedServiceItem] = useState<ServiceItem | PromoPackage | null>(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isMyAppointmentsOpen, setIsMyAppointmentsOpen] = useState(false);
-  const [isBarberAdminModalOpen, setIsBarberAdminModalOpen] = useState(false);
-  const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
-  const [isAgendaOpen, setIsAgendaOpen] = useState(false);
-
-  // Carrega usuário salvo e configurações do servidor ao iniciar
-  useEffect(() => {
-    // 1. Tenta validar sessão JWT via backend
-    api.getMe().then((user) => {
-      if (user) {
-        setCurrentUser(user);
-        localStorage.setItem('barbershop_logged_client', JSON.stringify(user));
-      } else {
-        const savedUser = localStorage.getItem('barbershop_logged_client');
-        if (savedUser) setCurrentUser(JSON.parse(savedUser));
-      }
-    }).catch(() => {
-      const savedUser = localStorage.getItem('barbershop_logged_client');
-      if (savedUser) setCurrentUser(JSON.parse(savedUser));
-    });
-
-    // 2. Carrega configurações do banco de dados (status Aberta/Fechada)
-    api.getSettings().then((settings) => {
-      if (settings && typeof settings.isOpenOverride === 'boolean') {
-        setIsOpen(settings.isOpenOverride);
-      }
-    }).catch(() => {});
-  }, []);
-
-  // Dados Iniciais dos Serviços (SEM barboterapia conforme solicitado)
-  const services: ServiceItem[] = [
+  // Estados dinâmicos para Serviços e Pacotes vindos do Banco / API
+  const [services, setServices] = useState<ServiceItem[]>([
     {
       id: 'srv-corte',
       name: 'Corte Tradicional / Fade',
@@ -109,10 +76,9 @@ export default function App() {
       durationMinutes: 60,
       description: 'Combinações sob medida para eventos ou atendimentos especiais.',
     },
-  ];
+  ]);
 
-  // Pacotes Promocionais Oficiais (SEM barboterapia / massagem)
-  const packages: PromoPackage[] = [
+  const [packages, setPackages] = useState<PromoPackage[]>([
     {
       id: 'pkg-1',
       title: 'Pacote 1 — Estilo Semanal',
@@ -142,7 +108,60 @@ export default function App() {
       ],
       isFeatured: true,
     },
-  ];
+  ]);
+
+  // Modais
+  const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
+  const [selectedServiceItem, setSelectedServiceItem] = useState<ServiceItem | PromoPackage | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isMyAppointmentsOpen, setIsMyAppointmentsOpen] = useState(false);
+  const [isBarberAdminModalOpen, setIsBarberAdminModalOpen] = useState(false);
+  const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
+  const [isAgendaOpen, setIsAgendaOpen] = useState(false);
+
+  // Carrega usuário salvo, configurações e dados do servidor ao iniciar
+  useEffect(() => {
+    // 1. Tenta validar sessão JWT via backend
+    api.getMe().then((user) => {
+      if (user) {
+        setCurrentUser(user);
+        localStorage.setItem('barbershop_logged_client', JSON.stringify(user));
+      } else {
+        const savedUser = localStorage.getItem('barbershop_logged_client');
+        if (savedUser) setCurrentUser(JSON.parse(savedUser));
+      }
+    }).catch(() => {
+      const savedUser = localStorage.getItem('barbershop_logged_client');
+      if (savedUser) setCurrentUser(JSON.parse(savedUser));
+    });
+
+    // 2. Carrega configurações do banco de dados (status Aberta/Fechada)
+    api.getSettings().then((settings) => {
+      if (settings && typeof settings.isOpenOverride === 'boolean') {
+        setIsOpen(settings.isOpenOverride);
+      }
+    }).catch(() => {});
+
+    // 3. Busca os serviços dinâmicos do backend (/api/services)
+    fetch('/api/services')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setServices(data);
+        }
+      })
+      .catch((err) => console.error('Erro ao buscar serviços do servidor:', err));
+
+    // 4. Busca os pacotes promocionais dinâmicos do backend (/api/packages)
+    fetch('/api/packages')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setPackages(data);
+        }
+      })
+      .catch((err) => console.error('Erro ao buscar pacotes do servidor:', err));
+  }, []);
 
   // Perfil Oficial do Leonardo Arruda
   const barberProfile: BarberProfile = {
@@ -222,7 +241,7 @@ export default function App() {
           }}
         />
 
-        {/* Tabela de Serviços e Promoções */}
+        {/* Tabela de Serviços e Promoções (Consumindo do Banco/API) */}
         <ServicesTable
           services={services}
           packages={packages}
