@@ -46,6 +46,11 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          // Remove caches antigos após cada build e ativar a nova versão sem aguardar
+          // todas as abas fecharem. registerType:autoUpdate complementa estas opções.
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpeg,jpg,woff,woff2}'],
           navigateFallbackDenylist: [/^\/api/],
         },
