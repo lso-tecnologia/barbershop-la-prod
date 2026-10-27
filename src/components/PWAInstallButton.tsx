@@ -19,10 +19,10 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
         className={`group relative inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-3.5 py-1.5 text-xs font-semibold text-black shadow-lg shadow-amber-500/20 transition-all hover:brightness-110 active:scale-95 ${
           compact ? 'text-[11px] px-2.5 py-1' : ''
         }`}
-        title="Instalar App da Barbearia no celular"
+        title="Baixar o app da barbearia"
       >
         <Download className="w-3.5 h-3.5 text-black animate-bounce" />
-        <span>Instalar App</span>
+        <span>Baixar agora</span>
       </button>
     );
   }
@@ -38,7 +38,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
           }`}
         >
           <Smartphone className="w-3.5 h-3.5" />
-          <span>Instalar no iPhone</span>
+          <span>Baixar agora</span>
         </button>
 
         {showIOSGuide && (
@@ -57,7 +57,7 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
                   <Smartphone className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-display text-base font-bold text-white">Instalar no iPhone</h3>
+                  <h3 className="font-display text-base font-bold text-white">Baixar o app</h3>
                   <p className="text-xs text-neutral-400">PWA BARBERSHOP L.A</p>
                 </div>
               </div>

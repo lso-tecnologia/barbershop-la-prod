@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Calendar, Clock, Scissors, AlertTriangle, MessageCircle, CheckCircle2, Ban, Lock, User } from 'lucide-react';
 import { UserAccount, AppointmentRecord } from '../types/barbershop';
 import { api } from '../services/api';
+import { PixPaymentPanel } from './PixPaymentPanel';
 
 interface MyAppointmentsModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [payingApt, setPayingApt] = useState<AppointmentRecord | null>(null);
 
   useEffect(() => {
     if (isOpen && currentUser) {
@@ -59,13 +61,14 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
     }
   };
 
-  const handlePayNow = async (id: string) => {
-    try {
-      const url = await api.createCheckout(id);
-      window.location.href = url;
-    } catch (err: any) {
-      setLoadError(err.message || 'Não foi possível abrir o pagamento.');
-    }
+  // Abre o Pix (QR Code + copia e cola) dentro do app
+  const handlePayNow = (apt: AppointmentRecord) => setPayingApt(apt);
+
+  const handlePixPaid = () => {
+    if (!payingApt) return;
+    const id = payingApt.id;
+    setAppointments((prev) => prev.map((a) => (a.id === id ? { ...a, status: 'confirmed', paymentStatus: 'paid' } : a)));
+    setPayingApt(null);
   };
 
   const handleCancelAppointment = async (id: string) => {
@@ -218,10 +221,10 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
 
                   {awaitingPayment && (
                     <button
-                      onClick={() => handlePayNow(apt.id)}
+                      onClick={() => handlePayNow(apt)}
                       className="mb-2 w-full rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-2 text-[11px] font-black uppercase tracking-wider text-black hover:brightness-110"
                     >
-                      Pagar agora (Mercado Pago)
+                      Pagar agora com Pix
                     </button>
                   )}
 
@@ -259,6 +262,32 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
           </div>
         )}
       </div>
+
+      {/* Pix (QR Code + copia e cola) para uma reserva aguardando pagamento */}
+      {payingApt && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="relative w-full max-w-sm rounded-3xl border border-amber-500/40 bg-[#121212] p-5 shadow-2xl text-neutral-100 max-h-[92vh] overflow-y-auto">
+            <button
+              onClick={() => setPayingApt(null)}
+              className="absolute top-4 right-4 rounded-xl p-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white"
+              aria-label="Fechar"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="pt-4">
+              <PixPaymentPanel
+                appointmentId={payingApt.id}
+                itemName={payingApt.itemName}
+                onPaid={handlePixPaid}
+                onExpired={() =>
+                  setAppointments((prev) => prev.map((a) => (a.id === payingApt.id && a.paymentStatus !== 'paid' ? { ...a, status: 'cancelled' } : a)))
+                }
+                onClose={() => setPayingApt(null)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

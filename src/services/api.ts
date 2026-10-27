@@ -1,4 +1,4 @@
-import { UserAccount, ServiceItem, PromoPackage, NoticeData, AppointmentRecord } from '../types/barbershop';
+import { UserAccount, ServiceItem, PromoPackage, NoticeData, AppointmentRecord, PixPayment, RevenueSummary } from '../types/barbershop';
 
 const API_BASE = '/api';
 
@@ -206,16 +206,16 @@ export const api = {
     return json.appointment;
   },
 
-  // --- PAGAMENTO ONLINE (Mercado Pago) ---
-  async createCheckout(appointmentId: string): Promise<string> {
-    const res = await fetch(`${API_BASE}/payments/checkout`, {
+  // --- PAGAMENTO PIX (Mercado Pago) — QR Code e "copia e cola" dentro do app ---
+  async createPix(appointmentId: string): Promise<PixPayment> {
+    const res = await fetch(`${API_BASE}/payments/pix`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appointmentId }),
     });
     const json = await parseJson(res);
-    if (!res.ok || !json.initPoint) throw new Error(json.error || 'Não foi possível abrir o pagamento.');
-    return json.initPoint;
+    if (!res.ok || !json.qrCode) throw new Error(json.error || 'Não foi possível gerar o Pix.');
+    return json as PixPayment;
   },
 
   async getPaymentStatus(appointmentId: string): Promise<{
@@ -230,5 +230,40 @@ export const api = {
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro ao consultar pagamento.');
     return json;
+  },
+
+  // --- FATURAMENTO (barbeiro) ---
+  async adminRevenue(month: string): Promise<RevenueSummary> {
+    const res = await fetch(`${API_BASE}/admin/revenue?month=${encodeURIComponent(month)}`, { cache: 'no-store', headers: { ...getAuthHeader() } });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar o faturamento.');
+    return json as RevenueSummary;
+  },
+
+  // --- AVISO (POP-UP) ---
+  // Aviso que os clientes veem (null = nenhum). Nunca fica em cache.
+  async getActiveNotice(): Promise<NoticeData | null> {
+    const res = await fetch(`${API_BASE}/notices/active`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    const json = await parseJson(res);
+    return json && json.title && json.message ? (json as NoticeData) : null;
+  },
+
+  async adminGetNotice(): Promise<NoticeData | null> {
+    const res = await fetch(`${API_BASE}/admin/notice`, { cache: 'no-store', headers: { ...getAuthHeader() } });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar o aviso.');
+    return json.notice || null;
+  },
+
+  async adminSaveNotice(data: { title: string; message: string; validUntil: string; isActive: boolean }): Promise<NoticeData> {
+    const res = await fetch(`${API_BASE}/admin/notice`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(data),
+    });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao salvar o aviso.');
+    return json.notice;
   },
 };

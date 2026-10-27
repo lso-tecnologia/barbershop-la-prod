@@ -49,7 +49,7 @@ export const Header: React.FC<HeaderProps> = ({
           <OpenStatusBadge
             isOpen={isOpen}
             onToggleDemo={onToggleDemoStatus}
-            showAdminToggle={isAdmin}
+            showAdminToggle={!!isAdmin}
           />
         </div>
 
@@ -134,7 +134,7 @@ export const Header: React.FC<HeaderProps> = ({
             <OpenStatusBadge
               isOpen={isOpen}
               onToggleDemo={onToggleDemoStatus}
-              showAdminToggle={isAdmin}
+              showAdminToggle={!!isAdmin}
             />
           </div>
 

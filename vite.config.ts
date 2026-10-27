@@ -11,6 +11,7 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        injectRegister: false, // o registro é feito em src/lib/appUpdate.ts (atualiza sozinho e recarrega na hora certa)
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
           id: '/',
@@ -46,8 +47,43 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpeg,jpg,woff,woff2}'],
-          navigateFallbackDenylist: [/^\/api/],
+          // Só o "esqueleto" do app (HTML/JS/CSS/ícones) fica pré-carregado.
+          // As fotos (jpeg) NÃO entram aqui: carregam sob demanda e ficam em cache com limite (veja runtimeCaching).
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          globIgnores: ['assets/aistudio/**'],
+          cleanupOutdatedCaches: true, // apaga os caches das versões antigas
+          skipWaiting: true,           // versão nova assume assim que instala...
+          clientsClaim: true,          // ...e controla as abas abertas (o recarregamento é feito em src/lib/appUpdate.ts)
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api\//],
+          runtimeCaching: [
+            // API: nunca vem do cache (agenda, preços e aviso precisam ser sempre atuais)
+            {
+              urlPattern: ({url}: {url: URL}) => url.pathname.startsWith('/api/'),
+              handler: 'NetworkOnly',
+            },
+            // Fotos do site: mostra a cópia salva e atualiza em segundo plano; no máximo 40 fotos / 30 dias
+            {
+              urlPattern: ({request, url}: {request: Request; url: URL}) =>
+                request.destination === 'image' && url.origin === self.location.origin,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'bs-images',
+                expiration: {maxEntries: 40, maxAgeSeconds: 60 * 60 * 24 * 30},
+                cacheableResponse: {statuses: [0, 200]},
+              },
+            },
+            // Fontes do Google
+            {
+              urlPattern: /^https:\/\/fonts\.(?:googleapis|gstatic)\.com\/.*/i,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'bs-fonts',
+                expiration: {maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365},
+                cacheableResponse: {statuses: [0, 200]},
+              },
+            },
+          ],
         },
         devOptions: {
           enabled: false,

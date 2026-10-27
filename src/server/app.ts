@@ -7,10 +7,12 @@ import { verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
 import { db } from './db.js';
 import { daySlots, coveredSlots } from './slots.js';
+import { summarizeRevenue, monthRange } from './revenue.js';
 
 const app = express();
+app.disable('x-powered-by');
 app.set('trust proxy', 1); // Vercel: pega o IP real do cliente (x-forwarded-for)
-app.use(express.json());
+app.use(express.json({ limit: '50kb' }));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
@@ -24,6 +26,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   next();
 });
 
@@ -60,6 +65,13 @@ function requireBarberAdmin(req: AuthRequest, res: Response, next: NextFunction)
   }
   next();
 }
+
+// Limite de pedidos por IP (anti-abuso). Ex.: limit('register', 10, 60 * 60_000)
+const limit = (name: string, max: number, windowMs: number) => (req: Request, res: Response, next: NextFunction) => {
+  db.hitRateLimit(`${name}:${req.ip || 'unknown'}`, max, windowMs)
+    .then((ok) => (ok ? next() : res.status(429).json({ error: 'Muitas tentativas. Aguarde um pouco e tente novamente.' })))
+    .catch(() => next());
+};
 
 // Permite handlers async sem try/catch repetido
 const h = (fn: (req: AuthRequest, res: Response) => Promise<any>) => (req: Request, res: Response, next: NextFunction) =>
@@ -100,13 +112,13 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
 
 // ========== AUTENTICAÇÃO DO CLIENTE ==========
 
-app.post('/api/auth/register', h(async (req, res) => {
+app.post('/api/auth/register', limit('register', 10, 60 * 60_000), h(async (req, res) => {
   const { name, email, phone, password } = req.body || {};
   if (!name || !email || !phone || !password) {
     return res.status(400).json({ error: 'Preencha todos os campos obrigatórios.' });
   }
-  if (String(password).length < 6) {
-    return res.status(400).json({ error: 'A senha deve ter no mínimo 6 caracteres.' });
+  if (String(password).length < 8 || String(password).length > 100) {
+    return res.status(400).json({ error: 'A senha deve ter de 8 a 100 caracteres.' });
   }
   const cleanEmail = String(email).trim().toLowerCase();
   if (!/^[^\s@,()]+@[^\s@,()]+\.[^\s@,()]+$/.test(cleanEmail) || cleanEmail.length > 120) {
@@ -207,8 +219,8 @@ app.post('/api/auth/barber/login-step2', h(async (req, res) => {
   }
 
   await db.resetFailedLogin(ip);
-  const fullToken = jwt.sign({ id: user.id, email: user.email, role: 'barber_admin', name: user.name }, JWT_SECRET, { expiresIn: '7d' });
-  setSessionCookie(res, fullToken, 7);
+  const fullToken = jwt.sign({ id: user.id, email: user.email, role: 'barber_admin', name: user.name }, JWT_SECRET, { expiresIn: '3d' });
+  setSessionCookie(res, fullToken, 3);
   await db.addAuditLog('ADMIN_LOGIN_2FA', `${user.name} realizou login com 2FA`, user.id, user.name, req.ip);
   return res.json({ message: 'Autenticação 2FA concluída com sucesso!', user: publicUser(user), token: fullToken });
 }));
@@ -224,7 +236,7 @@ app.get('/api/auth/barber/2fa-setup', authenticateToken, requireBarberAdmin, h(a
 
 // ========== RECUPERAÇÃO DE SENHA (somente clientes) ==========
 
-app.post('/api/auth/forgot-password', h(async (req, res) => {
+app.post('/api/auth/forgot-password', limit('forgot', 5, 60 * 60_000), h(async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Informe seu e-mail cadastrado.' });
   const user = await db.findUserByEmail(String(email).trim().toLowerCase());
@@ -248,10 +260,10 @@ app.post('/api/auth/forgot-password', h(async (req, res) => {
   return res.json(response);
 }));
 
-app.post('/api/auth/reset-password', h(async (req, res) => {
+app.post('/api/auth/reset-password', limit('reset', 10, 15 * 60_000), h(async (req, res) => {
   const { token, newPassword } = req.body || {};
   if (!token || !newPassword) return res.status(400).json({ error: 'Token e nova senha são obrigatórios.' });
-  if (String(newPassword).length < 6) return res.status(400).json({ error: 'A nova senha deve ter no mínimo 6 caracteres.' });
+  if (String(newPassword).length < 8 || String(newPassword).length > 100) return res.status(400).json({ error: 'A nova senha deve ter de 8 a 100 caracteres.' });
   const ok = await db.verifyAndConsumeResetToken(String(token).trim().toUpperCase(), bcrypt.hashSync(String(newPassword), 10));
   if (!ok) return res.status(400).json({ error: 'Código de redefinição inválido ou expirado.' });
   return res.json({ message: 'Senha redefinida com sucesso! Agora você já pode entrar.' });
@@ -278,6 +290,8 @@ app.post('/api/settings/toggle-open', authenticateToken, requireBarberAdmin, h(a
   return res.json({ isOpen, message: `Barbearia agora está ${isOpen ? 'ABERTA' : 'FECHADA'}` });
 }));
 
+const isValidDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
+
 app.get('/api/services', h(async (_req, res) => res.json(await db.getServices())));
 app.post('/api/admin/services', authenticateToken, requireBarberAdmin, h(async (req, res) => {
   const { id, name, description = '', price, durationMinutes = 60, isPopular = false } = req.body || {};
@@ -294,7 +308,27 @@ app.delete('/api/admin/services/:id', authenticateToken, requireBarberAdmin, h(a
   return res.json({ services: await db.getServices() });
 }));
 app.get('/api/packages', h(async (_req, res) => res.json(await db.getPackages())));
+
+// ----- Aviso (pop-up) editável pelo barbeiro -----
 app.get('/api/notices/active', h(async (_req, res) => res.json(await db.getActiveNotice())));
+
+app.get('/api/admin/notice', authenticateToken, requireBarberAdmin, h(async (_req, res) => {
+  return res.json({ notice: await db.getNoticeForAdmin() });
+}));
+
+app.put('/api/admin/notice', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const b = req.body || {};
+  const title = String(b.title ?? '').trim();
+  const message = String(b.message ?? '').trim();
+  const isActive = b.isActive !== false;
+  const rawUntil = String(b.validUntil ?? '').trim();
+  if (!title || title.length > 80) return res.status(400).json({ error: 'Informe o título (até 80 caracteres).' });
+  if (!message || message.length > 600) return res.status(400).json({ error: 'Informe a mensagem (até 600 caracteres).' });
+  if (rawUntil && !(isValidDate(rawUntil))) return res.status(400).json({ error: 'Data de validade inválida.' });
+  const notice = await db.saveNotice({ title, message, validUntil: rawUntil || null, isActive });
+  await db.addAuditLog('NOTICE_UPDATED', `Aviso ${isActive ? 'ativo' : 'desativado'}: ${title}`, req.user!.id, req.user!.name, req.ip);
+  return res.json({ notice });
+}));
 
 // ========== AGENDAMENTOS ==========
 
@@ -317,8 +351,6 @@ function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction) {
   next();
 }
 
-const isValidDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
-
 // Horários já ocupados de um dia (sem dados pessoais)
 app.get('/api/appointments/taken', h(async (req, res) => {
   const date = req.query.date;
@@ -327,7 +359,7 @@ app.get('/api/appointments/taken', h(async (req, res) => {
   return res.json({ date, taken: await db.getTakenTimes(date) });
 }));
 
-app.post('/api/appointments', optionalAuth, h(async (req, res) => {
+app.post('/api/appointments', limit('appointments', 20, 60 * 60_000), optionalAuth, h(async (req, res) => {
   const b = req.body || {};
   const date = b.date, time = String(b.time || '');
   if (!isValidDate(date)) return res.status(400).json({ error: 'Data inválida.' });
@@ -360,8 +392,11 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
 
   // Preço oficial do banco. Pagamento online EXIGE preço válido do catálogo.
   const catalogItem = await db.findCatalogItem(itemName, itemType);
-  const catalogPrice = catalogItem ? catalogItem.price : null;
-  const durationMinutes = catalogItem ? catalogItem.durationMinutes : 60;
+  if (!catalogItem) {
+    return res.status(400).json({ error: 'Serviço não encontrado no catálogo. Atualize a página e escolha novamente.' });
+  }
+  const catalogPrice = catalogItem.price;
+  const durationMinutes = catalogItem.durationMinutes;
 
   // O atendimento ocupa 1 ou mais fatias de 30 min: todas precisam estar dentro do expediente e livres
   const needed = coveredSlots(time, durationMinutes);
@@ -375,13 +410,16 @@ app.post('/api/appointments', optionalAuth, h(async (req, res) => {
   if (online && !process.env.MP_ACCESS_TOKEN) {
     return res.status(503).json({ error: 'Pagamento online indisponível no momento. Escolha pagar no local.' });
   }
-  if (online && (catalogPrice === null || catalogPrice <= 0)) {
+  if (online && catalogPrice <= 0) {
     return res.status(400).json({ error: 'Este item não pode ser pago online (valor à combinar). Escolha pagar no local.' });
   }
-  const price = catalogPrice ?? Math.min(Math.max(Number(b.price) || 0, 0), 2000);
+  const price = catalogPrice; // sempre o preço do banco, nunca o enviado pelo navegador
+  const guestEmail = String(b.clientEmail || '').trim().toLowerCase().slice(0, 120);
   const email = req.user
     ? req.user.email
-    : String(b.clientEmail || `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`).trim().toLowerCase().slice(0, 120);
+    : /^[^\s@,()]+@[^\s@,()]+\.[^\s@,()]+$/.test(guestEmail)
+      ? guestEmail
+      : `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`;
 
   try {
     const apt = await db.createAppointment({
@@ -424,6 +462,7 @@ app.patch('/api/appointments/:id/cancel', authenticateToken, h(async (req, res) 
     if (hoursLeft < 2) return res.status(400).json({ error: 'Cancelamento só até 2h antes. Fale com o barbeiro pelo WhatsApp.' });
   }
   const updated = await db.updateAppointment(apt.id, { status: 'cancelled' });
+  await cancelPendingPix(apt); // evita que alguém pague um Pix de horário já cancelado
   await db.addAuditLog('APPOINTMENT_CANCELLED', `Agendamento ${apt.id} cancelado`, req.user!.id, req.user!.name, req.ip);
   return res.json({ appointment: updated });
 }));
@@ -433,6 +472,20 @@ app.get('/api/admin/appointments', authenticateToken, requireBarberAdmin, h(asyn
   const from = isValidDate(req.query.from) ? req.query.from : todayBR();
   const to = isValidDate(req.query.to) ? req.query.to : new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
   return res.json({ appointments: await db.listAppointments(from, to) });
+}));
+
+// ----- Faturamento (dia / mês) -----
+app.get('/api/admin/revenue', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const today = todayBR();
+  const month = typeof req.query.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(req.query.month) ? req.query.month : today.slice(0, 7);
+  const { from, to } = monthRange(month);
+  const rows = await db.listAppointments(from, to);
+  const summary = summarizeRevenue(rows, today);
+  // "Hoje" é sempre o dia de hoje, mesmo olhando outro mês
+  if (month !== today.slice(0, 7)) {
+    summary.today = summarizeRevenue(await db.listAppointments(today, today), today).today;
+  }
+  return res.json({ monthKey: month, ...summary });
 }));
 
 app.patch('/api/admin/appointments/:id', authenticateToken, requireBarberAdmin, h(async (req, res) => {
@@ -446,7 +499,7 @@ app.patch('/api/admin/appointments/:id', authenticateToken, requireBarberAdmin, 
   return res.json({ appointment: updated });
 }));
 
-// ========== PAGAMENTOS ONLINE (MERCADO PAGO — Checkout Pro: Pix e Cartão) ==========
+// ========== PAGAMENTOS ONLINE (MERCADO PAGO — Pix dentro do app, API /v1/payments) ==========
 
 const MP_API = 'https://api.mercadopago.com';
 const HOLD_MINUTES = 15;
@@ -459,13 +512,13 @@ function siteUrl(req: Request): string {
   return `${proto}://${host}`;
 }
 
-async function mp(path: string, init: { method?: string; body?: string } = {}): Promise<any> {
+async function mp(path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}): Promise<any> {
   const token = process.env.MP_ACCESS_TOKEN;
   if (!token) throw new Error('Pagamento online não configurado (MP_ACCESS_TOKEN ausente).');
   const r = await fetch(`${MP_API}${path}`, {
     method: init.method || 'GET',
     body: init.body,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
   });
   const text = await r.text();
   let json: any = {};
@@ -514,8 +567,19 @@ async function syncPaymentFromMp(apt: { id: string }): Promise<void> {
   }
 }
 
-// Cria o link de pagamento (Pix ou Cartão) para um agendamento pendente
-app.post('/api/payments/checkout', h(async (req, res) => {
+// Cancela no Mercado Pago um Pix que ainda não foi pago (melhor esforço; erros só vão para o log)
+async function cancelPendingPix(apt: { id: string; paymentMethod: string; paymentStatus: string; mpPaymentId?: string | null }): Promise<void> {
+  if (apt.paymentMethod !== 'pix' || apt.paymentStatus === 'paid' || !apt.mpPaymentId || !process.env.MP_ACCESS_TOKEN) return;
+  try {
+    await mp(`/v1/payments/${encodeURIComponent(apt.mpPaymentId)}`, { method: 'PUT', body: JSON.stringify({ status: 'cancelled' }) });
+  } catch (err) {
+    console.error('Não foi possível cancelar o Pix pendente de', apt.id, err);
+  }
+}
+
+// Gera (ou reaproveita) o Pix de um agendamento pendente e devolve o QR Code + código "copia e cola".
+// O cliente paga SEM sair do app; a confirmação chega pelo webhook (e pela consulta de status).
+app.post('/api/payments/pix', limit('pix', 30, 60 * 60_000), h(async (req, res) => {
   const id = String(req.body?.appointmentId || '');
   await db.expireUnpaid();
   const apt = await db.getAppointmentById(id);
@@ -525,35 +589,60 @@ app.post('/api/payments/checkout', h(async (req, res) => {
   if (apt.status !== 'pending') return res.status(400).json({ error: 'Reserva expirada ou cancelada. Faça um novo agendamento.' });
   if (apt.price <= 0) return res.status(400).json({ error: 'Valor inválido para pagamento online.' });
 
-  const base = siteUrl(req);
-  const expiresAt = new Date(apt.createdAt).getTime() + HOLD_MINUTES * 60000;
-  const expirationDateTo = new Date(expiresAt - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
+  const secondsLeft = Math.floor((new Date(apt.createdAt).getTime() + HOLD_MINUTES * 60000 - Date.now()) / 1000);
+  if (secondsLeft <= 0) return res.status(400).json({ error: 'Reserva expirada. Faça um novo agendamento.' });
 
-  // Somente Pix: bloqueia cartões, boleto e caixa eletrônico no Checkout Pro
-  const excluded = [{ id: 'credit_card' }, { id: 'debit_card' }, { id: 'prepaid_card' }, { id: 'ticket' }, { id: 'atm' }];
+  // Se já existe um Pix válido para este agendamento, mostra o mesmo (não cria cobrança duplicada)
+  let payment: any = null;
+  if (apt.mpPaymentId) {
+    try {
+      const old = await mp(`/v1/payments/${encodeURIComponent(apt.mpPaymentId)}`);
+      if (old.status === 'approved') {
+        await applyMpPayment(old);
+        return res.status(400).json({ error: 'Este agendamento já foi pago.' });
+      }
+      const expires = old.date_of_expiration ? new Date(old.date_of_expiration).getTime() : 0;
+      if (old.status === 'pending' && old.point_of_interaction?.transaction_data?.qr_code && expires > Date.now() + 60000) payment = old;
+    } catch (err) {
+      console.error('Falha ao reaproveitar Pix anterior:', err);
+    }
+  }
 
-  const pref = await mp('/checkout/preferences', {
-    method: 'POST',
-    body: JSON.stringify({
-      items: [{ id: apt.id, title: apt.itemName.slice(0, 120), description: 'BARBERSHOP L.A', quantity: 1, currency_id: 'BRL', unit_price: Number(apt.price.toFixed(2)) }],
-      payer: { name: apt.clientName },
-      external_reference: apt.id,
-      back_urls: {
-        success: `${base}/?pagamento=sucesso&apt=${apt.id}`,
-        pending: `${base}/?pagamento=pendente&apt=${apt.id}`,
-        failure: `${base}/?pagamento=falhou&apt=${apt.id}`,
-      },
-      auto_return: 'approved',
-      notification_url: `${base}/api/payments/webhook`,
-      expires: true,
-      expiration_date_to: expirationDateTo,
-      payment_methods: { excluded_payment_types: excluded, installments: 1 },
-    }),
+  if (!payment) {
+    const base = siteUrl(req);
+    // O Mercado Pago exige validade mínima de 30 min para Pix. A reserva do horário continua valendo só 15 min.
+    const expiration = new Date(Date.now() + 30 * 60000 - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
+    const [firstName, ...rest] = apt.clientName.trim().split(/\s+/);
+    payment = await mp('/v1/payments', {
+      method: 'POST',
+      headers: { 'X-Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({
+        transaction_amount: Number(apt.price.toFixed(2)),
+        description: `${apt.itemName} — BARBERSHOP L.A`.slice(0, 200),
+        payment_method_id: 'pix',
+        external_reference: apt.id,
+        date_of_expiration: expiration,
+        ...(base.startsWith('https://') ? { notification_url: `${base}/api/payments/webhook` } : {}),
+        payer: { email: apt.clientEmail, first_name: firstName || 'Cliente', ...(rest.length ? { last_name: rest.join(' ') } : {}) },
+      }),
+    });
+    await db.updateAppointment(apt.id, { mpPaymentId: String(payment.id) });
+  }
+
+  const td = payment.point_of_interaction?.transaction_data;
+  if (!td?.qr_code) throw new Error('O Mercado Pago não devolveu o código Pix.');
+  const qrCodeImage = td.qr_code_base64
+    ? `data:image/png;base64,${td.qr_code_base64}`
+    : await QRCode.toDataURL(String(td.qr_code), { margin: 1, width: 320 });
+
+  return res.json({
+    appointmentId: apt.id,
+    paymentId: String(payment.id),
+    amount: apt.price,
+    qrCode: String(td.qr_code),   // "Pix copia e cola"
+    qrCodeImage,                  // imagem do QR Code (data URL)
+    secondsLeft,                  // tempo restante da reserva do horário
   });
-
-  if (!pref.init_point) throw new Error('O Mercado Pago não devolveu o link de pagamento.');
-  await db.updateAppointment(apt.id, { mpPreferenceId: String(pref.id) });
-  return res.json({ initPoint: pref.init_point });
 }));
 
 // Aviso automático (webhook) do Mercado Pago
@@ -631,7 +720,7 @@ app.get('/api/setup', (req, res) => {
     </form>`));
 });
 
-app.post('/api/setup', h(async (req, res) => {
+app.post('/api/setup', limit('setup', 10, 60 * 60_000), h(async (req, res) => {
   const setupKey = process.env.SETUP_KEY;
   if (!setupKey) return res.status(404).send(page('<h2>Setup desativado</h2>'));
   const { key, password } = req.body || {};
@@ -666,7 +755,12 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontra
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Erro na API:', err);
-  res.status(500).json({ error: err?.message || 'Erro interno no servidor.' });
+  if (err?.type === 'entity.parse.failed' || err?.status === 400) return res.status(400).json({ error: 'Requisição inválida.' });
+  if (err?.type === 'entity.too.large' || err?.status === 413) return res.status(413).json({ error: 'Requisição muito grande.' });
+  const msg = String(err?.message || '');
+  // Detalhes do banco e da configuração só vão para o log da Vercel, nunca para o navegador
+  const hide = !msg || /^Erro no banco|^Configuração ausente|supabase|postgres/i.test(msg);
+  res.status(500).json({ error: hide ? 'Erro interno no servidor. Tente novamente em instantes.' : msg });
 });
 
 export default app;

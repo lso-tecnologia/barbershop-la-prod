@@ -117,10 +117,16 @@ export const ServicesTable: React.FC<ServicesTableProps> = ({
                 </div>
 
                 <div className="flex items-baseline gap-1 mb-4">
-                  <span className="font-display text-3xl font-black text-amber-400">
-                    R$ {pkg.price.toFixed(2).replace('.', ',')}
-                  </span>
-                  <span className="text-xs text-neutral-400">/mês</span>
+                  {pkg.price > 0 ? (
+                    <>
+                      <span className="font-display text-3xl font-black text-amber-400">
+                        R$ {pkg.price.toFixed(2).replace('.', ',')}
+                      </span>
+                      <span className="text-xs text-neutral-400">/mês</span>
+                    </>
+                  ) : (
+                    <span className="font-display text-2xl font-black text-amber-400">À combinar</span>
+                  )}
                 </div>
 
                 <p className="text-xs text-neutral-300 mb-5 leading-relaxed">

@@ -1,3 +1,5 @@
+> 🔄 **ATUALIZAÇÃO MAIS RECENTE (cache do PWA, Pix com QR Code dentro do app, pacotes e pop-up editável):** veja `ALTERACOES_CACHE_PIX_PACOTES_AVISO.md`. Onde este documento falar em redirecionar ao Mercado Pago/Checkout Pro, vale o novo documento.
+
 > 📱 **Última atualização (só Pix, horários de 30 min, celular):** veja `ALTERACOES_PIX_30MIN_CELULAR.md`.
 
 > 💳 **Pagamentos online (Pix/Cartão — Mercado Pago):** veja `PAGAMENTOS_MERCADO_PAGO.md` (passo a passo + alterações + pendências).
