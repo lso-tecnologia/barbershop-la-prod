@@ -7,6 +7,7 @@
   ],
   "headers": [
     {
+<<<<<<< HEAD
       "source": "/",
       "headers": [
         {
@@ -21,6 +22,33 @@
         {
           "key": "Cache-Control",
           "value": "no-cache, no-store, must-revalidate"
+=======
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "SAMEORIGIN"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=()"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=63072000; includeSubDomains"
+>>>>>>> 63d70f2 (Corrigindo mapeamento do db.ts para buscar serviços direto do Supabase)
         }
       ]
     },
@@ -30,6 +58,13 @@
         {
           "key": "Cache-Control",
           "value": "no-cache, no-store, must-revalidate"
+<<<<<<< HEAD
+=======
+        },
+        {
+          "key": "Service-Worker-Allowed",
+          "value": "/"
+>>>>>>> 63d70f2 (Corrigindo mapeamento do db.ts para buscar serviços direto do Supabase)
         }
       ]
     },
@@ -38,9 +73,17 @@
       "headers": [
         {
           "key": "Cache-Control",
+<<<<<<< HEAD
           "value": "no-cache, no-store, must-revalidate"
+=======
+          "value": "no-cache, must-revalidate"
+>>>>>>> 63d70f2 (Corrigindo mapeamento do db.ts para buscar serviços direto do Supabase)
         }
       ]
     }
   ]
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 63d70f2 (Corrigindo mapeamento do db.ts para buscar serviços direto do Supabase)

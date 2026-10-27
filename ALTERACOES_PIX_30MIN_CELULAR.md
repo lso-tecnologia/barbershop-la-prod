@@ -1,3 +1,5 @@
+> 🔄 **ATUALIZAÇÃO MAIS RECENTE (cache do PWA, Pix com QR Code dentro do app, pacotes e pop-up editável):** veja `ALTERACOES_CACHE_PIX_PACOTES_AVISO.md`. Onde este documento falar em redirecionar ao Mercado Pago/Checkout Pro, vale o novo documento.
+
 # BARBERSHOP L.A — Alterações: só Pix, horários de 30 em 30 min e melhorias no celular
 
 Documento com **tudo que foi modificado** e **todos os passos até concluir**. Serve para você ou para outra IA continuar.

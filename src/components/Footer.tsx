@@ -1,5 +1,6 @@
 import React from 'react';
 import { Scissors, ShieldCheck, Heart, MapPin, Phone, Clock, Lock } from 'lucide-react';
+import { forceRefreshApp } from '../lib/appUpdate';
 
 interface FooterProps {
   onOpenBarberLogin?: () => void;
@@ -124,6 +125,14 @@ export const Footer: React.FC<FooterProps> = ({
               className="hover:text-amber-400 transition-colors underline"
             >
               Política de Privacidade & LGPD
+            </button>
+            <span>•</span>
+            <button
+              onClick={() => { void forceRefreshApp(); }}
+              className="hover:text-amber-400 transition-colors underline"
+              title="Apaga o cache do aplicativo e carrega a versão mais nova"
+            >
+              Atualizar app
             </button>
             <span>•</span>
             <span className="flex items-center gap-1 text-neutral-400">

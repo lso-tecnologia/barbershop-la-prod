@@ -85,8 +85,8 @@ export const ClientAuthModal: React.FC<ClientAuthModalProps> = ({
     e.preventDefault();
     setErrorMessage('');
 
-    if (password.length < 6) {
-      setErrorMessage('A senha deve ter no mínimo 6 caracteres.');
+    if (password.length < 8) {
+      setErrorMessage('A senha deve ter no mínimo 8 caracteres.');
       return;
     }
 
@@ -380,7 +380,7 @@ export const ClientAuthModal: React.FC<ClientAuthModalProps> = ({
                 <div>
                   <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5 mb-1">
                     <Lock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Senha (mínimo 6 caracteres)</span>
+                    <span>Senha (mínimo 8 caracteres)</span>
                   </label>
                   <input
                     type="password"
@@ -502,7 +502,7 @@ export const ClientAuthModal: React.FC<ClientAuthModalProps> = ({
                 <div>
                   <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5 mb-1">
                     <Lock className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Nova Senha (mínimo 6 caracteres)</span>
+                    <span>Nova Senha (mínimo 8 caracteres)</span>
                   </label>
                   <input
                     type="password"

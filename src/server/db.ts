@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import crypto from 'crypto';
 import { coveredSlots } from './slots.js';
 
 export interface UserRow {
@@ -52,6 +53,41 @@ export interface PackageRow {
   description: string;
   benefits: string[];
   isFeatured: boolean;
+}
+
+export interface NoticeRow {
+  id: string;            // identificador do aviso + versão (muda quando o barbeiro edita)
+  title: string;
+  message: string;
+  validUntil: string | null; // "YYYY-MM-DD" ou null (sem validade)
+  isActive: boolean;
+  priority: 'normal' | 'urgent';
+  updatedAt: string | null;
+}
+
+// Aceita "YYYY-MM-DD" e o formato antigo "DD/MM/YYYY"
+function normalizeValidUntil(v: unknown): string | null {
+  const s = String(v ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+}
+
+// Identificador imprevisível (não dá para "adivinhar" o id de agendamento/usuário de outra pessoa)
+const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(9).toString('base64url')}`;
+
+function mapNotice(r: any): NoticeRow {
+  const d = r.data ?? {};
+  const version = String(d.version ?? d.updatedAt ?? d.createdAt ?? '1');
+  return {
+    id: `${r.id}:${version}`,
+    title: String(d.title ?? ''),
+    message: String(d.message ?? ''),
+    validUntil: normalizeValidUntil(d.validUntil),
+    isActive: !!r.is_active && d.isActive !== false,
+    priority: d.priority === 'urgent' ? 'urgent' : 'normal',
+    updatedAt: d.updatedAt ?? null,
+  };
 }
 
 function mapAppointment(r: any): AppointmentRow {
@@ -138,7 +174,7 @@ export const db = {
     twoFactorSecret?: string;
   }): Promise<UserRow> {
     const row = {
-      id: 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      id: newId('usr'),
       role: u.role,
       name: u.name,
       phone: u.phone,
@@ -174,6 +210,27 @@ export const db = {
 
   async resetFailedLogin(ip: string): Promise<void> {
     await client().from('login_attempts').delete().eq('ip', ip);
+  },
+
+  // --- LIMITE DE REQUISIÇÕES (anti-abuso) ---
+  // Reaproveita a tabela login_attempts (chave "rl:..."): count = pedidos na janela; locked_until = fim da janela.
+  // Devolve true se PODE continuar. Se o banco falhar, não bloqueia o serviço (só registra no log).
+  async hitRateLimit(key: string, max: number, windowMs: number): Promise<boolean> {
+    try {
+      const k = `rl:${key}`;
+      const now = Date.now();
+      const { data } = await client().from('login_attempts').select('*').eq('ip', k).maybeSingle();
+      if (!data || !data.locked_until || new Date(data.locked_until).getTime() <= now) {
+        await client().from('login_attempts').upsert({ ip: k, count: 1, locked_until: new Date(now + windowMs).toISOString() });
+        return true;
+      }
+      const count = Number(data.count || 0) + 1;
+      await client().from('login_attempts').upsert({ ip: k, count, locked_until: data.locked_until });
+      return count <= max;
+    } catch (err) {
+      console.error('Falha no limite de requisições:', err);
+      return true;
+    }
   },
 
   // --- REDEFINIÇÃO DE SENHA ---
@@ -264,9 +321,12 @@ export const db = {
     if (error) fail('deleteService', error);
   },
 
+  // Pacotes: os dados ficam dentro da coluna jsonb "data" (title, priceCents, economyText, benefits...).
+  // (Antes o código lia colunas que não existem -> preço 0 e título "Pacote".)
   async getPackages(): Promise<PackageRow[]> {
-    const { data, error } = await client().from('packages').select('*');
+    const { data, error } = await client().from('packages').select('*').eq('is_active', true);
     if (error) {
+<<<<<<< HEAD
       console.error('Falha ao buscar pacotes:', error.message);
       return [];
     }
@@ -295,12 +355,58 @@ export const db = {
         isFeatured: Boolean(d.isFeatured ?? d.is_featured ?? r.is_featured ?? false),
       };
     });
+=======
+      console.error('Erro ao ler pacotes:', error.message);
+      return [];
+    }
+    return (data ?? [])
+      .map((r: any) => {
+        const d = r.data ?? {};
+        const price = d.price !== undefined ? Number(d.price) : Number(d.priceCents ?? 0) / 100;
+        return {
+          id: String(r.id),
+          title: String(d.title || d.name || 'Pacote'),
+          price: Number.isFinite(price) ? price : 0,
+          economy: String(d.economy ?? d.economyText ?? ''),
+          description: String(d.description ?? ''),
+          benefits: Array.isArray(d.benefits) ? d.benefits.map(String) : [],
+          isFeatured: !!d.isFeatured,
+        };
+      })
+      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+>>>>>>> 63d70f2 (Corrigindo mapeamento do db.ts para buscar serviços direto do Supabase)
   },
 
-  async getActiveNotice(): Promise<any | null> {
-    const { data, error } = await client().from('notices').select('data').eq('is_active', true).limit(1);
-    if (error) fail('getActiveNotice', error);
-    return data && data.length ? data[0].data : null;
+  // --- AVISO (POP-UP) EDITÁVEL PELO BARBEIRO ---
+  // Fica na tabela "notices". O aviso oficial é a linha de id "main"; ao salvar, as demais são desativadas.
+  async getNoticeForAdmin(): Promise<NoticeRow | null> {
+    const { data, error } = await client().from('notices').select('id, data, is_active');
+    if (error) fail('getNoticeForAdmin', error);
+    const rows = data ?? [];
+    const row = rows.find((r: any) => r.id === 'main') ?? rows.find((r: any) => r.is_active) ?? rows[0];
+    return row ? mapNotice(row) : null;
+  },
+
+  // Aviso que os clientes veem: precisa estar ativo e dentro da validade
+  async getActiveNotice(): Promise<NoticeRow | null> {
+    const n = await db.getNoticeForAdmin();
+    if (!n || !n.isActive) return null;
+    if (n.validUntil && Date.now() > new Date(`${n.validUntil}T23:59:59-03:00`).getTime()) return null;
+    return n;
+  },
+
+  async saveNotice(n: { title: string; message: string; validUntil: string | null; isActive: boolean }): Promise<NoticeRow> {
+    const now = new Date().toISOString();
+    // "version" muda a cada salvamento: quem já fechou o aviso antigo vê o novo
+    const data = {
+      id: 'main', title: n.title, message: n.message, validUntil: n.validUntil,
+      isActive: n.isActive, priority: 'normal', version: String(Date.now()), updatedAt: now,
+    };
+    const { error } = await client().from('notices').upsert({ id: 'main', data, is_active: n.isActive });
+    if (error) fail('saveNotice', error);
+    const { error: offErr } = await client().from('notices').update({ is_active: false }).neq('id', 'main');
+    if (offErr) fail('saveNotice(desativar antigos)', offErr);
+    return mapNotice({ id: 'main', data, is_active: n.isActive });
   },
 
   // --- AGENDAMENTOS ---
@@ -323,7 +429,7 @@ export const db = {
 
   async createAppointment(a: Omit<AppointmentRow, 'id' | 'createdAt'>): Promise<AppointmentRow> {
     const row = {
-      id: 'apt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      id: newId('apt'),
       user_id: a.userId,
       client_name: a.clientName,
       client_phone: a.clientPhone,

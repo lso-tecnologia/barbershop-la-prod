@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { ServiceItem, PromoPackage, UserAccount, AppointmentRecord } from '../types/barbershop';
 import { api } from '../services/api';
+import { PixPaymentPanel } from './PixPaymentPanel';
 
 // Horários de INÍCIO de 30 em 30 min (mesma regra do servidor: src/server/slots.ts)
 const SLOT_MIN = 30;
@@ -87,6 +88,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setSelectedSlot('');
       setFormError('');
       setCreatedAppointment(null);
+      setPixAppointment(null);
     }
   }, [isOpen, initialSelectedItem]);
 
@@ -122,6 +124,9 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   // Agendamento recém-criado
   const [createdAppointment, setCreatedAppointment] = useState<AppointmentRecord | null>(null);
+
+  // Reserva aguardando pagamento Pix (mostra o QR Code / copia e cola dentro do app)
+  const [pixAppointment, setPixAppointment] = useState<AppointmentRecord | null>(null);
 
   // Erros de validação
   const [formError, setFormError] = useState('');
@@ -265,7 +270,6 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     if (!chosenItem || isSubmitting) return;
     setFormError('');
     setIsSubmitting(true);
-    let redirecting = false;
     try {
       // Se já criamos a reserva pendente (ex.: falhou abrir o pagamento), reaproveita
       let saved: AppointmentRecord | null =
@@ -293,10 +297,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setCreatedAppointment(saved);
 
       if (isOnline) {
-        // Vai para o Mercado Pago (somente Pix). O retorno é tratado em App.tsx.
-        const url = await api.createCheckout(saved.id);
-        redirecting = true;
-        window.location.href = url;
+        // Pix dentro do app: mostra QR Code + copia e cola (sem redirecionar para o Mercado Pago)
+        setPixAppointment(saved);
         return;
       }
 
@@ -312,8 +314,18 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setStep(2);
       }
     } finally {
-      if (!redirecting) setIsSubmitting(false);
+      setIsSubmitting(false);
     }
+  };
+
+  // Pix confirmado: segue para o comprovante
+  const handlePixPaid = () => {
+    if (!pixAppointment) return;
+    const paid: AppointmentRecord = { ...pixAppointment, status: 'confirmed', paymentStatus: 'paid' };
+    setCreatedAppointment(paid);
+    setPixAppointment(null);
+    if (onBookingConfirmed) onBookingConfirmed(paid);
+    setStep(5);
   };
 
   // Link para o WhatsApp após confirmação
@@ -337,6 +349,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     setSelectedSlot('');
     setFormError('');
     setCreatedAppointment(null);
+    setPixAppointment(null);
     onClose();
   };
 
@@ -366,7 +379,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 {step === 1 && 'Qual serviço você deseja agendar?'}
                 {step === 2 && 'Escolha a Data & Horário'}
                 {step === 3 && 'Seus Dados de Contato'}
-                {step === 4 && 'Forma de Pagamento'}
+                {step === 4 && (pixAppointment ? 'Pague com Pix' : 'Forma de Pagamento')}
                 {step === 5 && 'Agendamento Confirmado!'}
               </h3>
             </div>
@@ -533,6 +546,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 min={todayStr}
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
+                // Tocar em qualquer parte do campo abre o calendário (no celular o ícone é pequeno)
+                onClick={(e) => { try { (e.currentTarget as HTMLInputElement).showPicker?.(); } catch { /* navegador sem suporte */ } }}
                 className="w-full rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3 text-sm text-white focus:border-amber-500 focus:outline-none"
               />
             </div>
@@ -722,7 +737,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         )}
 
         {/* PASSO 4: FORMA DE PAGAMENTO */}
-        {step === 4 && (
+        {step === 4 && pixAppointment && (
+          <PixPaymentPanel
+            appointmentId={pixAppointment.id}
+            itemName={pixAppointment.itemName}
+            onPaid={handlePixPaid}
+            onClose={handleResetAndClose}
+          />
+        )}
+
+        {step === 4 && !pixAppointment && (
           <div className="space-y-4">
             <p className="text-xs text-neutral-400">
               Escolha como prefere acertar seu atendimento:
@@ -775,10 +799,10 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="flex-1">
                   <div className="flex items-center gap-2 font-bold text-white text-xs">
                     <QrCode className="w-4 h-4 text-emerald-400" />
-                    <span>Pix (Mercado Pago)</span>
+                    <span>Pix (QR Code e Copia e Cola)</span>
                   </div>
                   <p className="text-[11px] text-neutral-400 mt-0.5">
-                    Pague pelo Pix no ambiente seguro do Mercado Pago. Confirmação automática.
+                    Pague pelo app do seu banco sem sair daqui. Confirmação automática.
                   </p>
                 </div>
               </label>
@@ -787,7 +811,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
             {isOnline && (
               <div className="rounded-xl bg-sky-500/10 border border-sky-500/30 p-3 text-[11px] text-sky-200/90">
-                🔒 Você será levado ao <strong>Mercado Pago</strong> para pagar com <strong>Pix</strong>. Seu horário fica reservado por <strong>15 minutos</strong>; se o pagamento não for concluído, ele é liberado automaticamente.
+                🔒 Vamos gerar um <strong>QR Code</strong> e um código <strong>Pix copia e cola</strong> para você pagar na hora. Seu horário fica reservado por <strong>15 minutos</strong>; se o pagamento não for concluído, ele é liberado automaticamente.
               </div>
             )}
             {!onlineAllowed && (
@@ -831,7 +855,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 py-3 text-xs font-black uppercase tracking-wider text-black shadow-lg hover:brightness-110 active:scale-98"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                <span>{isSubmitting ? (isOnline ? 'Abrindo o Pix...' : 'Confirmando...') : isOnline ? 'Pagar com Pix' : 'Confirmar Agendamento'}</span>
+                <span>{isSubmitting ? (isOnline ? 'Gerando o Pix...' : 'Confirmando...') : isOnline ? 'Gerar Pix' : 'Confirmar Agendamento'}</span>
               </button>
             </div>
           </div>
@@ -885,7 +909,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <span className="text-neutral-200 uppercase font-semibold">
                   {createdAppointment.paymentMethod === 'in_person'
                     ? 'Pagar na Barbearia'
-                    : createdAppointment.paymentMethod.toUpperCase()}
+                    : `${createdAppointment.paymentMethod.toUpperCase()}${createdAppointment.paymentStatus === 'paid' ? ' · PAGO ✔' : ''}`}
                 </span>
               </div>
               <div className="flex justify-between border-t border-neutral-800 pt-2 font-bold">

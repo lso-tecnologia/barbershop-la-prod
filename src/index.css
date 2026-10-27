@@ -83,3 +83,18 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #d4af37;
 }
+
+/* Campo de data: ícone do calendário BRANCO e fácil de tocar no celular (fundo escuro) */
+input[type="date"] {
+  min-height: 3rem;
+  cursor: pointer;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(2);
+  opacity: 1;
+  cursor: pointer;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0.25rem;
+  margin-left: 0.5rem;
+}

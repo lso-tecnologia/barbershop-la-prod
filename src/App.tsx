@@ -22,7 +22,6 @@ import { AdminAgendaModal } from './components/AdminAgendaModal';
 import { PrivacyPolicyModal } from './components/PrivacyPolicyModal';
 import { ServiceItem, PromoPackage, BarberProfile, NoticeData, UserAccount, AppointmentRecord } from './types/barbershop';
 import { api } from './services/api';
-import { PaymentReturnModal } from './components/PaymentReturnModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 
 export default function App() {
@@ -121,6 +120,12 @@ export default function App() {
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
   const [isAgendaOpen, setIsAgendaOpen] = useState(false);
 
+  // Aviso (pop-up) escrito pelo barbeiro — vem do servidor
+  const [notice, setNotice] = useState<NoticeData | null>(null);
+  const loadNotice = () => {
+    api.getActiveNotice().then(setNotice).catch(() => {});
+  };
+
   // Carrega usuário salvo, configurações e dados do servidor ao iniciar
   useEffect(() => {
     // 1. Tenta validar sessão JWT via backend
@@ -137,6 +142,9 @@ export default function App() {
       if (savedUser) setCurrentUser(JSON.parse(savedUser));
     });
 
+    // Aviso (pop-up) editável pelo barbeiro
+    loadNotice();
+
     // 2. Carrega configurações do banco de dados (status Aberta/Fechada)
     api.getSettings().then((settings) => {
       if (settings && typeof settings.isOpenOverride === 'boolean') {
@@ -145,7 +153,7 @@ export default function App() {
     }).catch(() => {});
 
    // Busca os serviços dinâmicos do backend (/api/services)
-    fetch('/api/services')
+    fetch('/api/services', { cache: 'no-store' })
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
@@ -162,11 +170,22 @@ export default function App() {
       .catch((err) => console.error('Erro ao buscar serviços do servidor:', err));
 
     // 4. Busca os pacotes promocionais dinâmicos do backend (/api/packages)
-    fetch('/api/packages')
+    fetch('/api/packages', { cache: 'no-store' })
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          setPackages(data);
+          // Garante tipos corretos (preço numérico, lista de benefícios) mesmo se o servidor mudar
+          setPackages(
+            data.map((p: any) => ({
+              id: String(p.id),
+              title: String(p.title || p.name || 'Pacote'),
+              price: Number(p.price ?? (Number(p.priceCents ?? 0) / 100)) || 0,
+              economy: String(p.economy ?? p.economyText ?? ''),
+              description: String(p.description ?? ''),
+              benefits: Array.isArray(p.benefits) ? p.benefits.map(String) : [],
+              isFeatured: !!p.isFeatured,
+            }))
+          );
         }
       })
       .catch((err) => console.error('Erro ao buscar pacotes do servidor:', err));
@@ -181,16 +200,6 @@ export default function App() {
     photoUrl: '/assets/aistudio/WhatsApp_Image_2026-10-24_at_16.19.02_2143161f.jpeg',
     familyPhotoUrl: '/assets/aistudio/WhatsApp_Image_2026-10-24_at_16.18.59_0a69f0f9.jpeg',
     hobbyPhotoUrl: '/assets/aistudio/WhatsApp_Image_2026-10-24_at_16.18.59__1__7126c5b1.jpeg',
-  };
-
-  // Aviso Ativo de Exemplo (com novos horários de funcionamento)
-  const activeNotice: NoticeData = {
-    id: 'notice-hours-la-2026-v2',
-    title: 'Horário Estendido: Ter-Sáb até 19h e Dom até 14h!',
-    message: 'Agora você tem mais tempo para cuidar do seu visual! Atendemos de Terça a Sábado das 09h às 19h e aos Domingos das 09h às 14h (horários de 30 em 30 min). Agende seu horário com antecedência!',
-    validUntil: '31/10/2026',
-    isActive: true,
-    priority: 'normal',
   };
 
   const handleSelectService = (item: ServiceItem | PromoPackage) => {
@@ -223,8 +232,7 @@ export default function App() {
       <OfflineIndicator />
 
       {/* Pop-up de Aviso Ativo */}
-      <NoticeModal notice={activeNotice} />
-      <PaymentReturnModal />
+      <NoticeModal notice={notice} />
 
       {/* Header Fixo */}
       <Header
@@ -343,6 +351,7 @@ export default function App() {
           setIsOpen((prev) => !prev);
         }}
         isOpenStatus={isOpen}
+        onNoticeSaved={loadNotice}
         onOpenAgenda={() => {
           setIsBarberAdminModalOpen(false);
           setIsAgendaOpen(true);

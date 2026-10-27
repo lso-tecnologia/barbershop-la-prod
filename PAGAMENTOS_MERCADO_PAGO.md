@@ -1,3 +1,5 @@
+> 🔄 **ATUALIZAÇÃO MAIS RECENTE (cache do PWA, Pix com QR Code dentro do app, pacotes e pop-up editável):** veja `ALTERACOES_CACHE_PIX_PACOTES_AVISO.md`. Onde este documento falar em redirecionar ao Mercado Pago/Checkout Pro, vale o novo documento.
+
 > 🔄 **ATUALIZAÇÃO:** o pagamento por **cartão foi removido**; hoje só existem **Pix** e **pagar no local**. Onde este documento falar em "Cartão", ignore. Veja `ALTERACOES_PIX_30MIN_CELULAR.md`.
 
 # BARBERSHOP L.A — Pagamentos online (Pix e Cartão com Mercado Pago)

@@ -19,12 +19,22 @@ export interface PromoPackage {
 }
 
 export interface NoticeData {
-  id: string;
+  id: string;                  // muda quando o barbeiro edita o aviso (reabre o pop-up para todos)
   title: string;
   message: string;
-  validUntil: string;
+  validUntil?: string | null;  // "YYYY-MM-DD" ou vazio (sem validade)
   isActive: boolean;
   priority: 'normal' | 'urgent';
+  updatedAt?: string | null;
+}
+
+export interface PixPayment {
+  appointmentId: string;
+  paymentId: string;
+  amount: number;
+  qrCode: string;       // código "Pix copia e cola"
+  qrCodeImage: string;  // imagem do QR Code (data URL)
+  secondsLeft: number;  // tempo restante da reserva do horário
 }
 
 export interface BarberProfile {
@@ -68,3 +78,13 @@ export interface AppointmentRecord {
   createdAt: string;
 }
 
+
+export interface RevenueSummary {
+  monthKey: string; // "2026-10"
+  month: { total: number; count: number; average: number };
+  today: { date: string; total: number; count: number };
+  toReceive: { total: number; count: number };
+  refundsNeeded: { total: number; count: number };
+  byMethod: Record<'pix' | 'in_person' | 'card', { total: number; count: number }>;
+  days: { date: string; total: number; count: number }[];
+}
