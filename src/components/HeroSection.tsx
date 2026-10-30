@@ -1,5 +1,6 @@
 import React from 'react';
 import { Scissors, Calendar, MapPin, ChevronDown, Sparkles } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 import { OpenStatusBadge } from './OpenStatusBadge';
 
 interface HeroSectionProps {
@@ -92,6 +93,11 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             <Scissors className="w-4 h-4 text-amber-400" />
             <span>Ver Tabela de Preços</span>
           </a>
+        </div>
+
+        {/* Celular: botão grande para baixar o app (some se já estiver instalado) */}
+        <div className="sm:hidden mx-auto max-w-xs">
+          <PWAInstallButton variant="banner" />
         </div>
 
         {/* Indicador de rolagem */}

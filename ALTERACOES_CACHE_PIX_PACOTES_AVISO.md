@@ -174,6 +174,28 @@ Testes da 2ª rodada: servidor 43 verificações OK (inclui faturamento e segura
 
 ---
 
+### 11.1 3ª rodada (29/10/2026) — Pix com erro 401 e botão "Baixar agora" no Android
+
+**Pix: "Mercado Pago recusou a requisição (401). Unauthorized use of live credentials".**
+Não é bug do código. Segundo a documentação do Mercado Pago (código `unauthorized_use_of_live_credentials`), significa que **as credenciais de produção da conta ainda não estão ativadas**. O que fazer (no painel do Mercado Pago, que a IA não consegue acessar):
+1. Mercado Pago Developers → **Suas integrações** → sua aplicação → **Credenciais de produção** → **Ativar credenciais** (pede dados do negócio, site e aceite dos termos).
+2. Copie o **Access Token de produção** e coloque em `MP_ACCESS_TOKEN` na Vercel (Settings → Environment Variables) → **Redeploy**.
+3. Confira `SITE_URL` (`https://...`, sem barra no final) e o webhook (`/api/payments/webhook`, evento Pagamentos).
+4. Se quiser testar antes de ativar produção, use as credenciais/usuários de TESTE do Mercado Pago (não misture token de teste com comprador real).
+No código: o cliente agora vê só "O pagamento por Pix está indisponível no momento. Escolha pagar no local ou fale com o barbeiro" (nada técnico); o motivo real vai para o log da Vercel e para a tabela `audit_logs` (ação `PIX_CREATE_FAILED`).
+
+**Botão "Baixar agora" não aparecia no Android.** Causa: na 2ª rodada só troquei o texto. O botão só existia quando o Chrome disparava o evento `beforeinstallprompt` (e ficava escondido no menu ☰). Agora:
+- Há um botão grande **BAIXAR AGORA** na tela inicial do celular (`HeroSection.tsx`) e no menu ☰.
+- Android/Chrome com instalação disponível → 1 toque abre o instalador do Chrome.
+- Android sem esse aviso → abre um guia (⋮ → Instalar app / Adicionar à tela inicial). iPhone → guia do Safari (Compartilhar → Adicionar à Tela de Início).
+- Computador → só aparece se o navegador permitir instalar. App já instalado → não aparece.
+- Arquivos: `PWAInstallButton.tsx` (reescrito), `usePWAInstall.ts` (detecta Android), `HeroSection.tsx`.
+Testado no Chromium emulando Android, Android com instalação nativa, iPhone e computador.
+
+**Importante para quem já tem o app instalado:** o aplicativo instalado só mostra a versão nova depois do deploy e de abrir o app 2 vezes (ou abrir `/?limpar-cache`). O botão "Baixar agora" nunca aparece dentro do app já instalado.
+
+---
+
 ## 12. Auditoria de segurança (26/10/2026)
 
 ### 12.1 Estado geral

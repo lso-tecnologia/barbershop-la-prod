@@ -525,7 +525,7 @@ async function mp(path: string, init: { method?: string; body?: string; headers?
   try { json = text ? JSON.parse(text) : {}; } catch { /* resposta não-JSON */ }
   if (!r.ok) {
     console.error('Mercado Pago erro', r.status, text);
-    throw new Error(`Mercado Pago recusou a requisição (${r.status}). ${json.message || ''}`.trim());
+    throw Object.assign(new Error(`Mercado Pago recusou a requisição (${r.status}). ${json.message || ''}`.trim()), { mpStatus: r.status });
   }
   return json;
 }
@@ -613,6 +613,7 @@ app.post('/api/payments/pix', limit('pix', 30, 60 * 60_000), h(async (req, res) 
     // O Mercado Pago exige validade mínima de 30 min para Pix. A reserva do horário continua valendo só 15 min.
     const expiration = new Date(Date.now() + 30 * 60000 - 3 * 3600 * 1000).toISOString().replace('Z', '-03:00');
     const [firstName, ...rest] = apt.clientName.trim().split(/\s+/);
+    try {
     payment = await mp('/v1/payments', {
       method: 'POST',
       headers: { 'X-Idempotency-Key': crypto.randomUUID() },
@@ -626,6 +627,17 @@ app.post('/api/payments/pix', limit('pix', 30, 60 * 60_000), h(async (req, res) 
         payer: { email: apt.clientEmail, first_name: firstName || 'Cliente', ...(rest.length ? { last_name: rest.join(' ') } : {}) },
       }),
     });
+    } catch (err: any) {
+      // O cliente vê uma mensagem simples; o motivo técnico fica no log da Vercel e no registro de auditoria
+      console.error('Falha ao criar Pix no Mercado Pago:', err);
+      await db.addAuditLog('PIX_CREATE_FAILED', String(err?.message || err).slice(0, 300), apt.userId ?? undefined, apt.clientName);
+      const credentials = err?.mpStatus === 401 || err?.mpStatus === 403;
+      return res.status(503).json({
+        error: credentials
+          ? 'O pagamento por Pix está indisponível no momento. Escolha pagar no local ou fale com o barbeiro pelo WhatsApp.'
+          : 'Não foi possível gerar o Pix agora. Tente novamente em instantes ou escolha pagar no local.',
+      });
+    }
     await db.updateAppointment(apt.id, { mpPaymentId: String(payment.id) });
   }
 
