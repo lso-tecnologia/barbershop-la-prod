@@ -245,3 +245,21 @@ Base já era boa: senhas com bcrypt, login do barbeiro com 2FA (TOTP) e bloqueio
 > Projeto: PWA de barbearia (React 19 + Vite 8 + Tailwind 4 + vite-plugin-pwa), backend Express como função serverless da Vercel (`api/index.ts` → `src/server/app.ts`), banco Supabase via `@supabase/supabase-js` com service role (`src/server/db.ts`). Leia **`ALTERACOES_CACHE_PIX_PACOTES_AVISO.md` inteiro primeiro** (seções 3, 4, 11, 12, 13), depois `PAGAMENTOS_MERCADO_PAGO.md` e `LEIA-ME_ALTERACOES.md`.
 > Já feito: atualização automática do PWA (`src/lib/appUpdate.ts`, workbox em `vite.config.ts`); Pix dentro do app (`POST /api/payments/pix`, `PixPaymentPanel.tsx`, webhook + polling); pacotes lidos do jsonb `data`; pop-up de aviso editável (`NoticeEditor.tsx`, `/api/admin/notice`); faturamento (`src/server/revenue.ts`, `GET /api/admin/revenue`, `RevenuePanel.tsx`); calendário com ícone branco; botão "Baixar agora"; endurecimento de segurança (CSP em `vercel.json`, `db.hitRateLimit`, catálogo obrigatório no agendamento, senha ≥ 8, ids aleatórios, erros sem detalhes).
 > Tarefas, nesta ordem: seção 13 itens 4 a 10. Regras: `/api` sempre responde JSON; preço sempre do banco; não relaxar a CSP sem necessidade; `vercel.json` com poucas regras (regra inválida derruba o deploy); rodar `npx tsc --noEmit` e `npx vite build` antes de entregar; testar pagamentos com credenciais de teste do Mercado Pago antes de produção.
+
+---
+
+## 15. Rodada 4 — Pix desligado, só "pagar no local"
+
+**Motivo:** o Mercado Pago recusava a cobrança (`unauthorized_use_of_live_credentials` = credenciais de produção ainda não ativadas na conta).
+
+**O que mudou**
+- `src/config.ts` → `ONLINE_PAYMENT_ENABLED = false`. Com `false`, o agendamento só mostra "Pagar no Local" (botão "Confirmar Agendamento") e some o botão "Pagar agora com Pix" em Meus Agendamentos.
+- `src/server/app.ts` → variável de ambiente `ONLINE_PAYMENTS`. Se não for `'true'`, `POST /api/appointments` com pagamento online e `POST /api/payments/pix` respondem 503 ("Pagamento online indisponível no momento").
+- Todo o código do Pix (QR Code, copia e cola, webhook, polling) continua no projeto, apenas desligado.
+
+**Como religar o Pix no futuro**
+1. Ativar as credenciais de produção na conta Mercado Pago e colocar o `MP_ACCESS_TOKEN` válido na Vercel.
+2. Criar `ONLINE_PAYMENTS=true` na Vercel.
+3. Trocar `ONLINE_PAYMENT_ENABLED` para `true` em `src/config.ts`, fazer commit e deploy.
+
+**Testes:** 44 verificações do servidor passando (com flag ligada) + teste com flag desligada (503 nas duas rotas).

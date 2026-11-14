@@ -22,6 +22,7 @@ import {
 import { ServiceItem, PromoPackage, UserAccount, AppointmentRecord } from '../types/barbershop';
 import { api } from '../services/api';
 import { PixPaymentPanel } from './PixPaymentPanel';
+import { ONLINE_PAYMENT_ENABLED } from '../config';
 
 // Horários de INÍCIO de 30 em 30 min (mesma regra do servidor: src/server/slots.ts)
 const SLOT_MIN = 30;
@@ -262,7 +263,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   // Confirmar Agendamento Final (Passo 5)
   // Pagamento online só para itens com valor definido
-  const onlineAllowed = currentItemPrice > 0;
+  const onlineAllowed = ONLINE_PAYMENT_ENABLED && currentItemPrice > 0;
   const effectiveMethod: 'in_person' | 'pix' = onlineAllowed ? paymentMethod : 'in_person';
   const isOnline = effectiveMethod !== 'in_person';
 
@@ -749,7 +750,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         {step === 4 && !pixAppointment && (
           <div className="space-y-4">
             <p className="text-xs text-neutral-400">
-              Escolha como prefere acertar seu atendimento:
+              {ONLINE_PAYMENT_ENABLED ? 'Escolha como prefere acertar seu atendimento:' : 'O pagamento é feito na barbearia, depois do atendimento:'}
             </p>
 
             <div className="space-y-2.5">
@@ -780,7 +781,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 </div>
               </label>
 
-              {/* Opção 2: Pix com QR Code */}
+              {ONLINE_PAYMENT_ENABLED && (
               <label
                 onClick={() => onlineAllowed && setPaymentMethod('pix')}
                 className={`${!onlineAllowed ? 'opacity-40 pointer-events-none ' : ''}flex items-start gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
@@ -806,6 +807,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   </p>
                 </div>
               </label>
+              )}
 
             </div>
 
@@ -814,7 +816,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 🔒 Vamos gerar um <strong>QR Code</strong> e um código <strong>Pix copia e cola</strong> para você pagar na hora. Seu horário fica reservado por <strong>15 minutos</strong>; se o pagamento não for concluído, ele é liberado automaticamente.
               </div>
             )}
-            {!onlineAllowed && (
+            {ONLINE_PAYMENT_ENABLED && !onlineAllowed && (
               <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-3 text-[11px] text-neutral-400">
                 Este item é "à combinar", então só está disponível pagamento no local.
               </div>

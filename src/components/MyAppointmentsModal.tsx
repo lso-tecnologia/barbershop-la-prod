@@ -3,6 +3,7 @@ import { X, Calendar, Clock, Scissors, AlertTriangle, MessageCircle, CheckCircle
 import { UserAccount, AppointmentRecord } from '../types/barbershop';
 import { api } from '../services/api';
 import { PixPaymentPanel } from './PixPaymentPanel';
+import { ONLINE_PAYMENT_ENABLED } from '../config';
 
 interface MyAppointmentsModalProps {
   isOpen: boolean;
@@ -219,7 +220,7 @@ export const MyAppointmentsModal: React.FC<MyAppointmentsModalProps> = ({
                     </div>
                   </div>
 
-                  {awaitingPayment && (
+                  {ONLINE_PAYMENT_ENABLED && awaitingPayment && (
                     <button
                       onClick={() => handlePayNow(apt)}
                       className="mb-2 w-full rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 px-3 py-2 text-[11px] font-black uppercase tracking-wider text-black hover:brightness-110"

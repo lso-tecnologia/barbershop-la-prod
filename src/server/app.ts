@@ -66,6 +66,9 @@ function requireBarberAdmin(req: AuthRequest, res: Response, next: NextFunction)
   next();
 }
 
+// Pagamento online (Pix) só funciona com ONLINE_PAYMENTS=true na Vercel. Desligado = só "pagar no local".
+const ONLINE_PAYMENTS_ENABLED = process.env.ONLINE_PAYMENTS === 'true';
+
 // Limite de pedidos por IP (anti-abuso). Ex.: limit('register', 10, 60 * 60_000)
 const limit = (name: string, max: number, windowMs: number) => (req: Request, res: Response, next: NextFunction) => {
   db.hitRateLimit(`${name}:${req.ip || 'unknown'}`, max, windowMs)
@@ -407,7 +410,7 @@ app.post('/api/appointments', limit('appointments', 20, 60 * 60_000), optionalAu
   if (needed.some((t) => occupied.has(t))) {
     return res.status(409).json({ error: `Esse horário não está mais disponível (este atendimento ocupa ${durationMinutes} min). Escolha outro.` });
   }
-  if (online && !process.env.MP_ACCESS_TOKEN) {
+  if (online && (!ONLINE_PAYMENTS_ENABLED || !process.env.MP_ACCESS_TOKEN)) {
     return res.status(503).json({ error: 'Pagamento online indisponível no momento. Escolha pagar no local.' });
   }
   if (online && catalogPrice <= 0) {
@@ -580,6 +583,7 @@ async function cancelPendingPix(apt: { id: string; paymentMethod: string; paymen
 // Gera (ou reaproveita) o Pix de um agendamento pendente e devolve o QR Code + código "copia e cola".
 // O cliente paga SEM sair do app; a confirmação chega pelo webhook (e pela consulta de status).
 app.post('/api/payments/pix', limit('pix', 30, 60 * 60_000), h(async (req, res) => {
+  if (!ONLINE_PAYMENTS_ENABLED) return res.status(503).json({ error: 'Pagamento online indisponível no momento. Pague no local.' });
   const id = String(req.body?.appointmentId || '');
   await db.expireUnpaid();
   const apt = await db.getAppointmentById(id);
