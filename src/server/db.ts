@@ -10,9 +10,17 @@ export interface UserRow {
   email: string;
   passwordHash: string;
   twoFactorSecret?: string | null;
+  twoFactorPendingSecret?: string | null; // 2FA novo aguardando confirmação (novo admin ou troca de celular)
+  twoFactorLastCounter?: number | null;   // último código 2FA aceito (impede reutilizar o mesmo código)
+  tokenVersion: number;                   // muda quando a senha/2FA muda -> derruba sessões antigas
+  emailVerified: boolean;                 // e-mail comprovado (só então agendamentos por e-mail são "dele")
   createdAt: string;
   updatedAt: string;
 }
+
+// Domínio usado quando um visitante agenda sem informar e-mail (ninguém pode se cadastrar com ele)
+export const GUEST_EMAIL_DOMAIN = 'barbershopla.com.br';
+const sha256 = (v: string) => crypto.createHash('sha256').update(v).digest('hex');
 
 export interface AppointmentRow {
   id: string;
@@ -137,6 +145,10 @@ function mapUser(r: any): UserRow {
     email: r.email,
     passwordHash: r.password_hash,
     twoFactorSecret: r.two_factor_secret,
+    twoFactorPendingSecret: r.two_factor_pending_secret ?? null,
+    twoFactorLastCounter: r.two_factor_last_counter == null ? null : Number(r.two_factor_last_counter),
+    tokenVersion: Number(r.token_version ?? 0),
+    emailVerified: !!r.email_verified,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -190,71 +202,98 @@ export const db = {
     return mapUser(data);
   },
 
-  // --- BLOQUEIO DE FORÇA BRUTA ---
-  async isIpLocked(ip: string): Promise<boolean> {
-    const { data, error } = await client().from('login_attempts').select('*').eq('ip', ip).maybeSingle();
-    if (error) fail('isIpLocked', error);
-    if (!data || !data.locked_until) return false;
-    if (new Date(data.locked_until).getTime() > Date.now()) return true;
-    await client().from('login_attempts').delete().eq('ip', ip);
-    return false;
-  },
-
-  async recordFailedLogin(ip: string): Promise<void> {
-    const { data } = await client().from('login_attempts').select('*').eq('ip', ip).maybeSingle();
-    const count = (data?.count ?? 0) + 1;
-    const locked_until = count >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
-    const { error } = await client().from('login_attempts').upsert({ ip, count, locked_until });
-    if (error) fail('recordFailedLogin', error);
-  },
-
-  async resetFailedLogin(ip: string): Promise<void> {
-    await client().from('login_attempts').delete().eq('ip', ip);
-  },
-
-  // --- LIMITE DE REQUISIÇÕES (anti-abuso) ---
-  // Reaproveita a tabela login_attempts (chave "rl:..."): count = pedidos na janela; locked_until = fim da janela.
-  // Devolve true se PODE continuar. Se o banco falhar, não bloqueia o serviço (só registra no log).
-  async hitRateLimit(key: string, max: number, windowMs: number): Promise<boolean> {
-    try {
-      const k = `rl:${key}`;
-      const now = Date.now();
-      const { data } = await client().from('login_attempts').select('*').eq('ip', k).maybeSingle();
-      if (!data || !data.locked_until || new Date(data.locked_until).getTime() <= now) {
-        await client().from('login_attempts').upsert({ ip: k, count: 1, locked_until: new Date(now + windowMs).toISOString() });
-        return true;
-      }
-      const count = Number(data.count || 0) + 1;
-      await client().from('login_attempts').upsert({ ip: k, count, locked_until: data.locked_until });
-      return count <= max;
-    } catch (err) {
-      console.error('Falha no limite de requisições:', err);
-      return true;
+  async updateUser(id: string, patch: {
+    passwordHash?: string; twoFactorSecret?: string | null; twoFactorPendingSecret?: string | null;
+    twoFactorLastCounter?: number | null; bumpTokenVersion?: boolean; emailVerified?: boolean;
+  }): Promise<UserRow | undefined> {
+    const upd: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (patch.passwordHash !== undefined) upd.password_hash = patch.passwordHash;
+    if (patch.twoFactorSecret !== undefined) upd.two_factor_secret = patch.twoFactorSecret;
+    if (patch.twoFactorPendingSecret !== undefined) upd.two_factor_pending_secret = patch.twoFactorPendingSecret;
+    if (patch.twoFactorLastCounter !== undefined) upd.two_factor_last_counter = patch.twoFactorLastCounter;
+    if (patch.emailVerified !== undefined) upd.email_verified = patch.emailVerified;
+    if (patch.bumpTokenVersion) {
+      const current = await db.findUserById(id);
+      if (!current) return undefined;
+      upd.token_version = current.tokenVersion + 1;
     }
+    const { data, error } = await client().from('users').update(upd).eq('id', id).select('*').maybeSingle();
+    if (error) fail('updateUser', error);
+    return data ? mapUser(data) : undefined;
+  },
+
+  // Grava o último código 2FA usado SÓ se ele for mais novo (atômico: dois pedidos com o mesmo código, só um passa)
+  async consumeTotpCounter(id: string, counter: number): Promise<boolean> {
+    const { data, error } = await client()
+      .from('users')
+      .update({ two_factor_last_counter: counter })
+      .eq('id', id)
+      .or(`two_factor_last_counter.is.null,two_factor_last_counter.lt.${Math.floor(counter)}`)
+      .select('id');
+    if (error) fail('consumeTotpCounter', error);
+    return (data ?? []).length === 1;
+  },
+
+  async listAdmins(): Promise<UserRow[]> {
+    const { data, error } = await client().from('users').select('*').eq('role', 'barber_admin').order('created_at');
+    if (error) fail('listAdmins', error);
+    return (data ?? []).map(mapUser);
+  },
+
+  async deleteUser(id: string): Promise<void> {
+    const { error } = await client().from('users').delete().eq('id', id);
+    if (error) fail('deleteUser', error);
+  },
+
+  // --- CONTADORES (força bruta e limite de pedidos) ---
+  // Tabela login_attempts: ip = chave, count = pedidos na janela, locked_until = fim da janela.
+  // O incremento é feito no banco (função hit_counter) numa única instrução -> pedidos simultâneos não "furam" o limite.
+  async hitCounter(key: string, windowSeconds: number): Promise<number> {
+    const { data, error } = await client().rpc('hit_counter', { p_key: key, p_window_seconds: windowSeconds });
+    if (error) fail('hitCounter', error);
+    return Number(data ?? 0);
+  },
+
+  async getCounter(key: string): Promise<number> {
+    const { data, error } = await client().from('login_attempts').select('count, locked_until').eq('ip', key).maybeSingle();
+    if (error) fail('getCounter', error);
+    if (!data?.locked_until || new Date(data.locked_until).getTime() <= Date.now()) return 0;
+    return Number(data.count || 0);
+  },
+
+  async clearCounter(key: string): Promise<void> {
+    await client().from('login_attempts').delete().eq('ip', key);
+  },
+
+  // Devolve true se PODE continuar. Se o banco falhar, lança erro (o servidor responde 503 em vez de liberar tudo).
+  async hitRateLimit(key: string, max: number, windowMs: number): Promise<boolean> {
+    const count = await db.hitCounter(`rl:${key}`, Math.ceil(windowMs / 1000));
+    return count <= max;
   },
 
   // --- REDEFINIÇÃO DE SENHA ---
   async createPasswordReset(email: string, token: string): Promise<void> {
     await client().from('password_resets').delete().eq('email', email);
     const expires_at = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    const { error } = await client().from('password_resets').insert({ token, email, expires_at });
+    // Guarda só o hash do código: quem ler o banco não consegue usar o código
+    const { error } = await client().from('password_resets').insert({ token: sha256(token), email, expires_at });
     if (error) fail('createPasswordReset', error);
   },
 
   async verifyAndConsumeResetToken(token: string, newPasswordHash: string): Promise<boolean> {
-    const { data, error } = await client().from('password_resets').select('*').eq('token', token).maybeSingle();
+    const hashed = sha256(token);
+    const { data, error } = await client().from('password_resets').select('*').eq('token', hashed).maybeSingle();
     if (error) fail('verifyResetToken', error);
     if (!data || new Date(data.expires_at).getTime() < Date.now()) return false;
 
     const user = await db.findUserByEmail(data.email);
     if (!user || user.role !== 'client') return false;
 
-    const { error: upErr } = await client()
-      .from('users')
-      .update({ password_hash: newPasswordHash, updated_at: new Date().toISOString() })
-      .eq('id', user.id);
-    if (upErr) fail('updatePassword', upErr);
-    await client().from('password_resets').delete().eq('token', token);
+    // Apaga o código ANTES de trocar a senha (não pode ser usado duas vezes)
+    const { data: deleted } = await client().from('password_resets').delete().eq('token', hashed).select('token');
+    if (!deleted?.length) return false;
+    // Quem recebeu o código no e-mail comprovou que é dono dele; sessões antigas caem
+    await db.updateUser(user.id, { passwordHash: newPasswordHash, emailVerified: true, bumpTokenVersion: true });
     return true;
   },
 
@@ -421,10 +460,14 @@ export const db = {
     return mapAppointment(data);
   },
 
-  async getAppointmentsForUser(userId: string, email: string): Promise<AppointmentRow[]> {
+  // Agendamentos feitos sem login só entram pelo e-mail se o e-mail da conta for COMPROVADO
+  async getAppointmentsForUser(userId: string, email: string, emailVerified: boolean): Promise<AppointmentRow[]> {
+    const useEmail = emailVerified && !email.toLowerCase().endsWith(`@${GUEST_EMAIL_DOMAIN}`);
     const [byUser, byEmail] = await Promise.all([
       client().from('appointments').select('*').eq('user_id', userId),
-      client().from('appointments').select('*').eq('client_email', email.toLowerCase()),
+      useEmail
+        ? client().from('appointments').select('*').eq('client_email', email.toLowerCase())
+        : Promise.resolve({ data: [] as any[], error: null }),
     ]);
     if (byUser.error) fail('getAppointmentsForUser', byUser.error);
     if (byEmail.error) fail('getAppointmentsForUser', byEmail.error);

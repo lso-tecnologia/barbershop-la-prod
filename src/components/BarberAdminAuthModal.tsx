@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, Lock, ShieldAlert, KeyRound, CheckCircle2, QrCode, Loader2, Power, Eye, EyeOff, Scissors, Plus, Pencil, Trash2, Save, Bell, Wallet } from 'lucide-react';
+import { X, Lock, ShieldAlert, KeyRound, CheckCircle2, Loader2, Power, Eye, EyeOff, Scissors, Plus, Pencil, Trash2, Save, Bell, Wallet, Users } from 'lucide-react';
 import { UserAccount } from '../types/barbershop';
 import { api } from '../services/api';
 import { NoticeEditor } from './NoticeEditor';
 import { RevenuePanel } from './RevenuePanel';
+import { AdminSecurityPanel } from './AdminSecurityPanel';
 
 interface BarberAdminAuthModalProps {
   isOpen: boolean;
@@ -27,17 +28,18 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
   onOpenAgenda,
   onNoticeSaved,
 }) => {
-  const [step, setStep] = useState<'credentials' | '2fa' | 'authenticated'>('credentials');
+  const [step, setStep] = useState<'credentials' | '2fa' | 'enroll' | 'authenticated'>('credentials');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [code, setCode] = useState('');
   const [tempToken, setTempToken] = useState('');
 
-  // 2FA Setup & QR Code
-  const [showQRGuide, setShowQRGuide] = useState(false);
+  // Primeiro acesso de um admin novo: QR Code do 2FA + senha definitiva
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [secret, setSecret] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showSecurity, setShowSecurity] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -66,14 +68,12 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
         setEmail('');
         setPassword('');
         setCode('');
+        setNewPassword('');
+        setQrCodeDataUrl('');
+        setSecret('');
         setErrorMessage('');
+        setSuccessMessage('');
       }
-
-      // Carrega dados do QR code do 2FA
-      api.getBarber2FASetup().then((res) => {
-        if (res.qrCodeDataUrl) setQrCodeDataUrl(res.qrCodeDataUrl);
-        if (res.secret) setSecret(res.secret);
-      }).catch(() => {});
     }
   }, [isOpen, isAlreadyAdmin]);
 
@@ -88,8 +88,16 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
     try {
       const res = await api.barberLoginStep1({ email, password });
       setTempToken(res.tempToken);
-      setStep('2fa');
-      setSuccessMessage('Senha administrativa confirmada! Insira o código 2FA do seu aplicativo autenticador.');
+      setCode('');
+      if (res.requires2FASetup) {
+        setQrCodeDataUrl(res.qrCodeDataUrl);
+        setSecret(res.secret);
+        setStep('enroll');
+        setSuccessMessage('Primeiro acesso: ative o 2FA no seu celular e crie sua senha definitiva.');
+      } else {
+        setStep('2fa');
+        setSuccessMessage('Senha administrativa confirmada! Insira o código 2FA do seu aplicativo autenticador.');
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Credenciais de administrador incorretas.');
     } finally {
@@ -104,10 +112,11 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
     setIsLoading(true);
 
     try {
-      const res = await api.barberLoginStep2({ tempToken, code });
+      const res = await api.barberLoginStep2(step === 'enroll' ? { tempToken, code, newPassword } : { tempToken, code });
       onLoginSuccess(res.user);
       setStep('authenticated');
-      setSuccessMessage('Autenticação em Dois Fatores (2FA) validada com sucesso!');
+      setSuccessMessage(res.message || 'Autenticação em Dois Fatores (2FA) validada com sucesso!');
+      setPassword(''); setNewPassword(''); setQrCodeDataUrl(''); setSecret('');
     } catch (err: any) {
       setErrorMessage(err.message || 'Código 2FA incorreto ou expirado.');
     } finally {
@@ -191,7 +200,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
               Acesso Restrito • Administrador
             </span>
             <h3 className="font-display text-xl font-bold text-white">
-              Painel do Leonardo Arruda
+              Painel do Barbeiro
             </h3>
           </div>
         </div>
@@ -304,34 +313,58 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
               </button>
             </div>
 
-            {/* Alternar Visualização do QR Code do Authenticator */}
-            <div className="pt-2 border-t border-neutral-800 text-center">
-              {qrCodeDataUrl && (
-              <button
-                type="button"
-                onClick={() => setShowQRGuide(!showQRGuide)}
-                className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:underline"
-              >
-                <QrCode className="w-3.5 h-3.5" />
-                <span>{showQRGuide ? 'Ocultar QR Code' : 'Escanear QR Code no Celular / Chave'}</span>
-              </button>
-              )}
+            <p className="pt-2 border-t border-neutral-800 text-center text-[11px] text-neutral-500">
+              Trocou de celular ou perdeu o app? Peça a outro administrador ou ao suporte técnico.
+            </p>
+          </form>
+        )}
 
-              {showQRGuide && qrCodeDataUrl && (
-                <div className="mt-3 p-4 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3 animate-fade-in text-center">
-                  <p className="text-[11px] text-neutral-300">
-                    Abra o <strong>Google Authenticator</strong> no seu celular e escaneie o código abaixo:
-                  </p>
-                  <img
-                    src={qrCodeDataUrl}
-                    alt="2FA QR Code"
-                    className="mx-auto rounded-xl p-2 bg-white w-44 h-44 shadow-md"
-                  />
-                  <div className="text-[10px] text-neutral-400">
-                    Chave manual: <code className="text-amber-400 font-mono font-bold">{secret}</code>
-                  </div>
-                </div>
-              )}
+        {/* PRIMEIRO ACESSO: ATIVAR 2FA + SENHA DEFINITIVA */}
+        {step === 'enroll' && (
+          <form onSubmit={handleStep2Submit} className="space-y-4">
+            <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3 text-center">
+              <p className="text-[11px] text-neutral-300">
+                1) No <strong>seu celular</strong>, abra o <strong>Google Authenticator</strong> → <strong>+</strong> → <strong>Ler QR code</strong>:
+              </p>
+              {qrCodeDataUrl && <img src={qrCodeDataUrl} alt="QR Code do 2FA" className="mx-auto rounded-xl p-2 bg-white w-44 h-44 shadow-md" />}
+              <div className="text-[10px] text-neutral-400 break-all">
+                Ou digite a chave: <code className="text-amber-400 font-mono font-bold">{secret}</code>
+              </div>
+            </div>
+            <label className="block text-xs font-semibold text-neutral-300">2) Crie sua senha definitiva (mín. 10 caracteres)
+              <input
+                type="password"
+                required
+                minLength={10}
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none"
+              />
+            </label>
+            <label className="block text-xs font-semibold text-neutral-300">3) Digite o código de 6 dígitos que apareceu no app
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                required
+                value={code}
+                placeholder="000000"
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                className="mt-1 w-full text-center tracking-[0.5em] text-2xl font-mono font-bold rounded-xl border border-amber-500/50 bg-neutral-900 py-3 text-amber-400 focus:border-amber-400 focus:outline-none"
+              />
+            </label>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setStep('credentials')} className="flex-1 rounded-xl border border-neutral-800 bg-neutral-900 py-2.5 text-xs font-bold text-neutral-400 hover:text-white">
+                Voltar
+              </button>
+              <button
+                type="submit"
+                disabled={isLoading || code.length < 6 || newPassword.length < 10}
+                className="flex-1 rounded-xl py-2.5 text-xs font-black uppercase tracking-wider bg-gradient-to-r from-amber-500 to-amber-600 text-black disabled:opacity-40 flex items-center justify-center gap-1.5"
+              >
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Ativar e entrar</span>}
+              </button>
             </div>
           </form>
         )}
@@ -348,7 +381,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                 Sessão Administrativa Ativa
               </span>
               <h3 className="font-display text-xl font-bold text-white mt-1">
-                Leonardo Arruda
+                {currentUser?.name || 'Administrador'}
               </h3>
               <p className="text-xs text-neutral-400">Barbeiro & Administrador Responsável</p>
             </div>
@@ -469,6 +502,20 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                     {editingServiceId ? 'Salvar alterações' : 'Adicionar serviço'}
                   </button>
                 </form>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowSecurity((v) => !v)}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900 py-2.5 text-xs font-black uppercase text-neutral-200 hover:border-amber-500 hover:text-amber-300"
+            >
+              <Users className="w-4 h-4 text-amber-400" /> Administradores e Segurança
+            </button>
+
+            {showSecurity && (
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-900/80 p-4">
+                <AdminSecurityPanel />
               </div>
             )}
 
