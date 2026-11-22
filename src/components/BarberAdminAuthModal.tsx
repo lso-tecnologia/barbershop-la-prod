@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { X, Lock, ShieldAlert, KeyRound, CheckCircle2, Loader2, Power, Eye, EyeOff, Scissors, Plus, Pencil, Trash2, Save, Bell, Wallet, Users } from 'lucide-react';
+import { X, Lock, ShieldAlert, KeyRound, CheckCircle2, Loader2, Power, Eye, EyeOff, Scissors, Plus, Pencil, Trash2, Save, Bell, Wallet, Users, Images } from 'lucide-react';
 import { UserAccount } from '../types/barbershop';
 import { api } from '../services/api';
 import { NoticeEditor } from './NoticeEditor';
 import { RevenuePanel } from './RevenuePanel';
 import { AdminSecurityPanel } from './AdminSecurityPanel';
+import { GalleryManager } from './GalleryManager';
 
 interface BarberAdminAuthModalProps {
   isOpen: boolean;
@@ -40,6 +41,7 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
   const [secret, setSecret] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [showSecurity, setShowSecurity] = useState(false);
+  const [showGallery, setShowGallery] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -502,6 +504,20 @@ export const BarberAdminAuthModal: React.FC<BarberAdminAuthModalProps> = ({
                     {editingServiceId ? 'Salvar alterações' : 'Adicionar serviço'}
                   </button>
                 </form>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowGallery((v) => !v)}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900 py-2.5 text-xs font-black uppercase text-neutral-200 hover:border-amber-500 hover:text-amber-300"
+            >
+              <Images className="w-4 h-4 text-amber-400" /> Fotos da Galeria
+            </button>
+
+            {showGallery && (
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-900/80 p-4">
+                <GalleryManager />
               </div>
             )}
 

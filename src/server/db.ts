@@ -53,6 +53,16 @@ export interface ServiceRow {
   image?: string;
 }
 
+export interface GalleryRow {
+  id: string;
+  position: number;
+  title: string;
+  subtitle: string;
+  category: string;
+  imageUrl: string | null; // foto que veio com o site; null = foto enviada pelo painel (fica no banco)
+  createdAt: string;
+}
+
 export interface PackageRow {
   id: string;
   title: string;
@@ -556,6 +566,43 @@ export const db = {
     return null;
   },
 
+
+  // --- GALERIA DE ESTILOS ---
+  // A lista NÃO traz a foto em si (pode ser pesada); a imagem é servida por /api/gallery/photo/:id
+  async listGallery(): Promise<GalleryRow[]> {
+    const { data, error } = await client()
+      .from('gallery_photos')
+      .select('id, position, title, subtitle, category, image_url, created_at')
+      .order('position', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (error) fail('listGallery', error);
+    return (data ?? []).map((r: any) => ({
+      id: r.id, position: Number(r.position ?? 0), title: r.title ?? '', subtitle: r.subtitle ?? '',
+      category: r.category ?? '', imageUrl: r.image_url ?? null, createdAt: r.created_at,
+    }));
+  },
+
+  async getGalleryImage(id: string): Promise<{ mime: string; data: string } | null> {
+    const { data, error } = await client().from('gallery_photos').select('mime, image_data').eq('id', id).maybeSingle();
+    if (error) fail('getGalleryImage', error);
+    return data?.image_data && data?.mime ? { mime: data.mime, data: data.image_data } : null;
+  },
+
+  async addGalleryPhoto(p: { title: string; subtitle: string; category: string; mime: string; base64: string }): Promise<void> {
+    const list = await db.listGallery();
+    const position = list.reduce((m, r) => Math.max(m, r.position), 0) + 1;
+    const { error } = await client().from('gallery_photos').insert({
+      id: newId('gal'), position, title: p.title, subtitle: p.subtitle, category: p.category,
+      mime: p.mime, image_data: p.base64,
+    });
+    if (error) fail('addGalleryPhoto', error);
+  },
+
+  async deleteGalleryPhoto(id: string): Promise<boolean> {
+    const { data, error } = await client().from('gallery_photos').delete().eq('id', id).select('id');
+    if (error) fail('deleteGalleryPhoto', error);
+    return (data ?? []).length > 0;
+  },
 
   // --- AUDITORIA ---
   async addAuditLog(action: string, details: string, userId?: string, userName?: string, ip?: string): Promise<void> {

@@ -43,6 +43,19 @@ export interface AdminAccount {
   createdAt: string;
 }
 
+export interface GalleryPhoto {
+  id: string;
+  title: string;
+  subtitle: string;
+  category: string;
+  imageUrl: string;
+}
+
+export interface GalleryState {
+  photos: GalleryPhoto[];
+  max: number;
+}
+
 export interface TwoFactorQr {
   qrCodeDataUrl: string;
   secret: string;
@@ -133,6 +146,26 @@ export const api = {
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Código 2FA incorreto.');
     return json;
+  },
+
+  // --- GALERIA DE ESTILOS ---
+  async getGallery(): Promise<GalleryState> {
+    const res = await fetch(`${API_BASE}/gallery`, { cache: 'no-store' });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar a galeria.');
+    return { photos: json.photos || [], max: Number(json.max) || 0 };
+  },
+
+  async adminAddGalleryPhoto(data: { title: string; subtitle: string; category: string; mime: string; imageBase64: string }): Promise<GalleryState> {
+    const json = await postJson('/admin/gallery', data);
+    return { photos: json.photos || [], max: Number(json.max) || 0 };
+  },
+
+  async adminDeleteGalleryPhoto(id: string): Promise<GalleryState> {
+    const res = await fetch(`${API_BASE}/admin/gallery/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const json = await parseJson(res);
+    if (!res.ok) throw new Error(json.error || 'Erro ao apagar a foto.');
+    return { photos: json.photos || [], max: Number(json.max) || 0 };
   },
 
   // --- ADMINISTRADORES E 2FA (painel do barbeiro) ---

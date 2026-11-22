@@ -12,7 +12,11 @@ import { newTotpSecret, verifyTotp, otpauthUri } from './totp.js';
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1); // Vercel: pega o IP real do cliente (x-forwarded-for)
-app.use(express.json({ limit: '50kb' }));
+// JSON pequeno em tudo (anti-abuso). Só o envio de foto da galeria aceita até 1,5 MB.
+const GALLERY_UPLOAD_PATH = '/api/admin/gallery';
+const smallJson = express.json({ limit: '50kb' });
+const galleryJson = express.json({ limit: '1500kb' });
+app.use((req, res, next) => (req.method === 'POST' && req.path === GALLERY_UPLOAD_PATH ? galleryJson : smallJson)(req, res, next));
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
@@ -544,6 +548,69 @@ app.put('/api/admin/notice', authenticateToken, requireBarberAdmin, h(async (req
   const notice = await db.saveNotice({ title, message, validUntil: rawUntil || null, isActive });
   await db.addAuditLog('NOTICE_UPDATED', `Aviso ${isActive ? 'ativo' : 'desativado'}: ${title}`, req.user!.id, req.user!.name, req.ip);
   return res.json({ notice });
+}));
+
+// ========== GALERIA DE ESTILOS ==========
+// Limite de fotos: para colocar uma nova, o barbeiro precisa apagar uma antes.
+const GALLERY_MAX = 6;
+const GALLERY_MAX_BYTES = 900 * 1024; // a foto chega já comprimida pelo navegador (~200 KB)
+const GALLERY_MIMES: Record<string, (b: Buffer) => boolean> = {
+  // Confere os "bytes mágicos" do arquivo: não basta dizer que é imagem, tem que SER imagem
+  'image/jpeg': (b) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/png': (b) => b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  'image/webp': (b) => b.length > 12 && b.subarray(0, 4).toString('ascii') === 'RIFF' && b.subarray(8, 12).toString('ascii') === 'WEBP',
+};
+
+const galleryView = (r: { id: string; title: string; subtitle: string; category: string; imageUrl: string | null; createdAt: string }) => ({
+  id: r.id, title: r.title, subtitle: r.subtitle, category: r.category,
+  imageUrl: r.imageUrl ?? `/api/gallery/photo/${encodeURIComponent(r.id)}?v=${encodeURIComponent(String(Date.parse(r.createdAt) || 0))}`,
+});
+
+app.get('/api/gallery', h(async (_req, res) => {
+  const list = await db.listGallery();
+  return res.json({ photos: list.map(galleryView), max: GALLERY_MAX });
+}));
+
+app.get('/api/gallery/photo/:id', h(async (req, res) => {
+  const img = await db.getGalleryImage(String(req.params.id));
+  if (!img || !GALLERY_MIMES[img.mime]) return res.status(404).json({ error: 'Foto não encontrada.' });
+  const buf = Buffer.from(img.data, 'base64');
+  res.setHeader('Content-Type', img.mime);
+  // A URL muda (?v=) se a foto mudar, então pode ficar em cache por muito tempo
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; sandbox");
+  return res.send(buf);
+}));
+
+app.post(GALLERY_UPLOAD_PATH, authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const b = req.body || {};
+  const title = String(b.title ?? '').trim().slice(0, 60);
+  const subtitle = String(b.subtitle ?? '').trim().slice(0, 120);
+  const category = String(b.category ?? '').trim().slice(0, 30);
+  const mime = String(b.mime ?? '');
+  if (!title) return res.status(400).json({ error: 'Dê um título para a foto.' });
+  const check = GALLERY_MIMES[mime];
+  if (!check || typeof b.imageBase64 !== 'string') return res.status(400).json({ error: 'Envie uma foto JPG, PNG ou WEBP.' });
+  const buf = Buffer.from(b.imageBase64, 'base64');
+  if (!buf.length || buf.length > GALLERY_MAX_BYTES) return res.status(400).json({ error: 'Foto muito grande. Tente outra foto.' });
+  if (!check(buf)) return res.status(400).json({ error: 'O arquivo enviado não é uma imagem válida.' });
+
+  const current = await db.listGallery();
+  if (current.length >= GALLERY_MAX) {
+    return res.status(409).json({ error: `A galeria já tem ${GALLERY_MAX} fotos (o máximo). Apague uma para colocar outra.` });
+  }
+  await db.addGalleryPhoto({ title, subtitle, category, mime, base64: buf.toString('base64') });
+  await db.addAuditLog('GALLERY_PHOTO_ADDED', `Foto adicionada à galeria: ${title}`, req.user!.id, req.user!.name, req.ip);
+  const list = await db.listGallery();
+  return res.status(201).json({ photos: list.map(galleryView), max: GALLERY_MAX });
+}));
+
+app.delete('/api/admin/gallery/:id', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const ok = await db.deleteGalleryPhoto(String(req.params.id));
+  if (!ok) return res.status(404).json({ error: 'Foto não encontrada.' });
+  await db.addAuditLog('GALLERY_PHOTO_DELETED', `Foto removida da galeria: ${req.params.id}`, req.user!.id, req.user!.name, req.ip);
+  const list = await db.listGallery();
+  return res.json({ photos: list.map(galleryView), max: GALLERY_MAX });
 }));
 
 // ========== AGENDAMENTOS ==========
