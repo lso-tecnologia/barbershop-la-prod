@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { api } from '../services/api';
 import { Camera, Sparkles, X, ChevronRight } from 'lucide-react';
 
 interface GalleryItem {
@@ -12,7 +13,8 @@ interface GalleryItem {
 export const GallerySection: React.FC = () => {
   const [selectedImage, setSelectedImage] = useState<GalleryItem | null>(null);
 
-  const galleryItems: GalleryItem[] = [
+  // Fotos de reserva: aparecem se o servidor não responder (ex.: sem internet)
+  const fallbackItems: GalleryItem[] = [
     {
       id: 'chair-poster',
       title: 'Ambiente & Tradição',
@@ -41,7 +43,31 @@ export const GallerySection: React.FC = () => {
       imageUrl: '/assets/aistudio/WhatsApp_Image_2026-10-24_at_16.18.59__2__e1070cd6.jpeg',
       category: 'Infantil',
     },
+    {
+      id: 'skin-fade',
+      title: 'Skin Fade & Barba',
+      subtitle: 'Degradê na navalha com transição perfeita para a barba',
+      imageUrl: '/assets/galeria/skin-fade-barba.jpg',
+      category: 'Degradê',
+    },
+    {
+      id: 'risco',
+      title: 'Degradê com Risco',
+      subtitle: 'Desenho na navalha e topo penteado',
+      imageUrl: '/assets/galeria/degrade-infantil-risco.jpg',
+      category: 'Arte & Freestyle',
+    },
   ];
+
+  // Fotos atuais vêm do banco (o barbeiro troca pelo painel)
+  const [galleryItems, setGalleryItems] = useState<GalleryItem[]>(fallbackItems);
+  useEffect(() => {
+    let alive = true;
+    api.getGallery()
+      .then(({ photos }) => { if (alive && photos.length) setGalleryItems(photos); })
+      .catch(() => { /* mantém as fotos de reserva */ });
+    return () => { alive = false; };
+  }, []);
 
   return (
     <section id="galeria" className="py-16 sm:py-24 bg-[#0a0a0a] border-t border-neutral-900">
@@ -65,7 +91,7 @@ export const GallerySection: React.FC = () => {
         </div>
 
         {/* Grid de Fotos com Aspect Ratios Elegantes */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {galleryItems.map((item) => (
             <div
               key={item.id}
