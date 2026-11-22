@@ -15,9 +15,38 @@ async function parseJson(res: Response): Promise<any> {
   }
 }
 
+// A sessão agora fica SÓ no cookie HttpOnly (o navegador envia sozinho; o JavaScript não consegue ler).
+// Limpa o token antigo que versões anteriores guardavam no localStorage.
+try { localStorage.removeItem('barbershop_auth_token'); } catch { /* ignora */ }
 function getAuthHeader(): Record<string, string> {
-  const token = localStorage.getItem('barbershop_auth_token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {};
+}
+
+async function postJson(path: string, body: unknown, method = 'POST') {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  const json = await parseJson(res);
+  if (!res.ok) throw new Error(json.error || 'Erro na requisição.');
+  return json;
+}
+
+export interface AdminAccount {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  has2FA: boolean;
+  isMe: boolean;
+  createdAt: string;
+}
+
+export interface TwoFactorQr {
+  qrCodeDataUrl: string;
+  secret: string;
+  otpauth: string;
 }
 
 export const api = {
@@ -30,7 +59,6 @@ export const api = {
     });
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro no cadastro.');
-    if (json.token) localStorage.setItem('barbershop_auth_token', json.token);
     return json;
   },
 
@@ -42,21 +70,16 @@ export const api = {
     });
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Erro no login.');
-    if (json.token) localStorage.setItem('barbershop_auth_token', json.token);
     return json;
   },
 
   async getMe(): Promise<UserAccount | null> {
-    try {
-      const res = await fetch(`${API_BASE}/auth/me`, {
-        headers: { ...getAuthHeader() },
-      });
-      if (!res.ok) return null;
-      const json = await parseJson(res);
-      return json.user;
-    } catch {
-      return null;
-    }
+    // null = servidor disse que não há sessão. Erro de rede = lança (o App mantém o modo offline).
+    const res = await fetch(`${API_BASE}/auth/me`, { cache: 'no-store' });
+    if (res.status === 401 || res.status === 403 || res.status === 404) return null;
+    if (!res.ok) throw new Error('Servidor indisponível.');
+    const json = await parseJson(res);
+    return json.user ?? null;
   },
 
   async logout() {
@@ -101,7 +124,7 @@ export const api = {
     return json;
   },
 
-  async barberLoginStep2(data: { tempToken: string; code: string }) {
+  async barberLoginStep2(data: { tempToken: string; code: string; newPassword?: string }) {
     const res = await fetch(`${API_BASE}/auth/barber/login-step2`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -109,15 +132,35 @@ export const api = {
     });
     const json = await parseJson(res);
     if (!res.ok) throw new Error(json.error || 'Código 2FA incorreto.');
-    if (json.token) localStorage.setItem('barbershop_auth_token', json.token);
     return json;
   },
 
-  async getBarber2FASetup() {
-    const res = await fetch(`${API_BASE}/auth/barber/2fa-setup`);
+  // --- ADMINISTRADORES E 2FA (painel do barbeiro) ---
+  async adminListAdmins(): Promise<AdminAccount[]> {
+    const res = await fetch(`${API_BASE}/admin/admins`, { cache: 'no-store' });
     const json = await parseJson(res);
-    if (!res.ok) throw new Error(json.error || 'Erro ao carregar dados do 2FA.');
-    return json;
+    if (!res.ok) throw new Error(json.error || 'Erro ao carregar administradores.');
+    return json.admins || [];
+  },
+
+  async adminCreateAdmin(data: { name: string; email: string; phone: string; tempPassword: string; code: string }): Promise<AdminAccount[]> {
+    return (await postJson('/admin/admins', data)).admins || [];
+  },
+
+  async adminRemoveAdmin(id: string, code: string): Promise<AdminAccount[]> {
+    return (await postJson(`/admin/admins/${encodeURIComponent(id)}`, { code }, 'DELETE')).admins || [];
+  },
+
+  async admin2FAStart(code: string): Promise<TwoFactorQr> {
+    return postJson('/admin/2fa/start', { code });
+  },
+
+  async admin2FAConfirm(code: string): Promise<{ message: string }> {
+    return postJson('/admin/2fa/confirm', { code });
+  },
+
+  async adminChangePassword(data: { currentPassword: string; newPassword: string; code: string }): Promise<{ message: string }> {
+    return postJson('/admin/password', data);
   },
 
   // --- CONFIGURAÇÕES & STATUS ---

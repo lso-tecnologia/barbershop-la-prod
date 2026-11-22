@@ -134,10 +134,12 @@ export default function App() {
         setCurrentUser(user);
         localStorage.setItem('barbershop_logged_client', JSON.stringify(user));
       } else {
-        const savedUser = localStorage.getItem('barbershop_logged_client');
-        if (savedUser) setCurrentUser(JSON.parse(savedUser));
+        // Servidor respondeu "sem sessão": não mostra o painel com dados velhos do navegador
+        localStorage.removeItem('barbershop_logged_client');
+        setCurrentUser(null);
       }
     }).catch(() => {
+      // Sem internet (PWA offline): mostra o último usuário só para exibição; o servidor sempre confere a sessão
       const savedUser = localStorage.getItem('barbershop_logged_client');
       if (savedUser) setCurrentUser(JSON.parse(savedUser));
     });

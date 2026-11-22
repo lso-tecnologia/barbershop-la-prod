@@ -3,11 +3,11 @@ import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { verifySync, generateURI } from 'otplib';
 import QRCode from 'qrcode';
-import { db } from './db.js';
+import { db, UserRow, GUEST_EMAIL_DOMAIN } from './db.js';
 import { daySlots, coveredSlots } from './slots.js';
 import { summarizeRevenue, monthRange } from './revenue.js';
+import { newTotpSecret, verifyTotp, otpauthUri } from './totp.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -20,6 +20,7 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const isProd = process.env.NODE_ENV === 'production';
 const JWT_SECRET = process.env.JWT_SECRET || (isProd ? '' : 'dev_only_secret_change_me');
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'leo.arruda226@gmail.com').toLowerCase();
+const EMAIL_RE = /^[^\s@,()]+@[^\s@,()]+\.[^\s@,()]+$/;
 
 // Headers de segurança
 app.use((req, res, next) => {
@@ -41,22 +42,66 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+type SessionUser = { id: string; email: string; role: 'client' | 'barber_admin'; name: string; emailVerified: boolean };
 export interface AuthRequest extends Request {
-  user?: { id: string; email: string; role: 'client' | 'barber_admin'; name: string };
+  user?: SessionUser;
+}
+
+const toSessionUser = (u: UserRow): SessionUser => ({ id: u.id, email: u.email, role: u.role, name: u.name, emailVerified: u.emailVerified });
+
+// ========== SESSÃO ==========
+// A sessão fica SÓ num cookie HttpOnly (o JavaScript da página não consegue ler -> um XSS não rouba a sessão).
+// O token leva a "versão" do usuário: trocar senha/2FA aumenta a versão e todas as sessões antigas deixam de valer.
+// Papel (cliente/admin) e dados vêm sempre do banco, nunca do token.
+
+function setSessionCookie(res: Response, token: string, days: number) {
+  res.cookie('auth_token', token, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: 'strict',
+    path: '/',
+    maxAge: days * 24 * 60 * 60 * 1000,
+  });
+}
+
+function issueSession(res: Response, user: UserRow, days: number) {
+  const token = jwt.sign({ id: user.id, tv: user.tokenVersion, purpose: 'session' }, JWT_SECRET, { expiresIn: `${days}d`, algorithm: 'HS256' });
+  setSessionCookie(res, token, days);
+}
+
+async function loadSession(req: Request): Promise<UserRow | null> {
+  const token = req.cookies?.auth_token;
+  if (!token) return null;
+  let decoded: any;
+  try {
+    decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+  } catch {
+    return null;
+  }
+  if (decoded?.purpose !== 'session' || typeof decoded.id !== 'string') return null;
+  const user = await db.findUserById(decoded.id);
+  if (!user || user.tokenVersion !== Number(decoded.tv)) return null;
+  return user;
 }
 
 function authenticateToken(req: AuthRequest, res: Response, next: NextFunction) {
-  const authHeader = req.headers['authorization'];
-  const token = (authHeader && authHeader.split(' ')[1]) || req.cookies?.auth_token;
-  if (!token) return res.status(401).json({ error: 'Não autorizado. Faça login para continuar.' });
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
-    if (decoded.is2FAPending) return res.status(403).json({ error: 'Conclua a verificação 2FA.' });
-    req.user = decoded;
-    next();
-  } catch {
-    return res.status(403).json({ error: 'Sessão expirada ou inválida.' });
-  }
+  loadSession(req)
+    .then((user) => {
+      if (!user) return res.status(401).json({ error: 'Sessão expirada ou inválida. Faça login para continuar.' });
+      req.user = toSessionUser(user);
+      next();
+    })
+    .catch(next);
+}
+
+// Se houver sessão válida, identifica o usuário; senão segue como visitante
+function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction) {
+  loadSession(req)
+    .then((user) => {
+      if (user) req.user = toSessionUser(user);
+      next();
+    })
+    .catch(() => next());
 }
 
 function requireBarberAdmin(req: AuthRequest, res: Response, next: NextFunction) {
@@ -70,10 +115,14 @@ function requireBarberAdmin(req: AuthRequest, res: Response, next: NextFunction)
 const ONLINE_PAYMENTS_ENABLED = process.env.ONLINE_PAYMENTS === 'true';
 
 // Limite de pedidos por IP (anti-abuso). Ex.: limit('register', 10, 60 * 60_000)
+// Se o banco falhar, BLOQUEIA (503) em vez de liberar sem limite.
 const limit = (name: string, max: number, windowMs: number) => (req: Request, res: Response, next: NextFunction) => {
   db.hitRateLimit(`${name}:${req.ip || 'unknown'}`, max, windowMs)
     .then((ok) => (ok ? next() : res.status(429).json({ error: 'Muitas tentativas. Aguarde um pouco e tente novamente.' })))
-    .catch(() => next());
+    .catch((err) => {
+      console.error('Falha no limite de requisições:', err);
+      res.status(503).json({ error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' });
+    });
 };
 
 // Permite handlers async sem try/catch repetido
@@ -84,15 +133,59 @@ const publicUser = (u: { id: string; name: string; email: string; phone: string;
   id: u.id, name: u.name, email: u.email, phone: u.phone, role: u.role,
 });
 
-function setSessionCookie(res: Response, token: string, days: number) {
-  res.cookie('auth_token', token, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'strict',
-    maxAge: days * 24 * 60 * 60 * 1000,
-  });
+// ========== PROTEÇÃO CONTRA FORÇA BRUTA ==========
+// Antes: um único contador por IP, zerado por QUALQUER login certo (o atacante zerava entrando na própria conta).
+// Agora: contadores separados por IP, por conta e por 2FA. Um login certo só zera o contador DAQUELA conta.
+const FAIL_WINDOW_SECONDS = 15 * 60;
+const MAX_FAILS_PER_IP = 20;
+const MAX_FAILS_PER_ACCOUNT = 10;
+const MAX_FAILS_2FA = 5;
+const ipFailKey = (req: Request) => `fail:ip:${req.ip || 'unknown'}`;
+const acctFailKey = (email: string) => `fail:acct:${email}`;
+const twoFaFailKey = (userId: string) => `fail:2fa:${userId}`;
+
+async function isBlocked(req: Request, extra: [string, number][] = []): Promise<boolean> {
+  const checks: [string, number][] = [[ipFailKey(req), MAX_FAILS_PER_IP], ...extra];
+  const counts = await Promise.all(checks.map(([k]) => db.getCounter(k)));
+  return counts.some((c, i) => c >= checks[i][1]);
 }
 
+async function recordFailure(req: Request, ...keys: string[]): Promise<void> {
+  await Promise.all([ipFailKey(req), ...keys].map((k) => db.hitCounter(k, FAIL_WINDOW_SECONDS)));
+}
+
+const BLOCKED_MSG = 'Muitas tentativas falhas. Por segurança, aguarde 15 minutos e tente novamente.';
+
+const validNewAdminPassword = (p: unknown) => typeof p === 'string' && p.length >= 10 && p.length <= 100;
+
+// Confere o código do Google Authenticator de um admin JÁ logado (para ações sensíveis).
+// Responde o erro e devolve false se o código for inválido.
+async function checkAdminCode(req: AuthRequest, res: Response, code: unknown): Promise<UserRow | null> {
+  const user = await db.findUserById(req.user!.id);
+  if (!user?.twoFactorSecret) {
+    res.status(400).json({ error: '2FA não configurado nesta conta.' });
+    return null;
+  }
+  const key = twoFaFailKey(user.id);
+  if (await isBlocked(req, [[key, MAX_FAILS_2FA]])) {
+    res.status(429).json({ error: BLOCKED_MSG });
+    return null;
+  }
+  const counter = verifyTotp(user.twoFactorSecret, String(code ?? ''), user.twoFactorLastCounter);
+  if (counter === null || !(await db.consumeTotpCounter(user.id, counter))) {
+    await recordFailure(req, key);
+    res.status(401).json({ error: 'Código do autenticador inválido ou já usado. Espere o próximo código (30 s) e tente de novo.' });
+    return null;
+  }
+  await db.clearCounter(key);
+  return user;
+}
+
+async function qrFor(secret: string, account: string) {
+  const otpauth = otpauthUri(secret, account);
+  const qrCodeDataUrl = await QRCode.toDataURL(otpauth, { margin: 2, width: 260 });
+  return { otpauth, qrCodeDataUrl, secret };
+}
 
 // Envio de e-mail via Resend (https://resend.com). Requer RESEND_API_KEY e RESEND_FROM.
 async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
@@ -124,7 +217,7 @@ app.post('/api/auth/register', limit('register', 10, 60 * 60_000), h(async (req,
     return res.status(400).json({ error: 'A senha deve ter de 8 a 100 caracteres.' });
   }
   const cleanEmail = String(email).trim().toLowerCase();
-  if (!/^[^\s@,()]+@[^\s@,()]+\.[^\s@,()]+$/.test(cleanEmail) || cleanEmail.length > 120) {
+  if (!EMAIL_RE.test(cleanEmail) || cleanEmail.length > 120 || cleanEmail.endsWith(`@${GUEST_EMAIL_DOMAIN}`)) {
     return res.status(400).json({ error: 'Informe um e-mail válido.' });
   }
   if (await db.findUserByEmail(cleanEmail)) {
@@ -132,109 +225,226 @@ app.post('/api/auth/register', limit('register', 10, 60 * 60_000), h(async (req,
   }
   const newUser = await db.createUser({
     role: 'client',
-    name: String(name).trim(),
-    phone: String(phone).trim(),
+    name: String(name).trim().slice(0, 80),
+    phone: String(phone).trim().slice(0, 20),
     email: cleanEmail,
     passwordHash: bcrypt.hashSync(String(password), 10),
   });
-  const token = jwt.sign({ id: newUser.id, email: newUser.email, role: newUser.role, name: newUser.name }, JWT_SECRET, { expiresIn: '30d' });
-  setSessionCookie(res, token, 30);
+  issueSession(res, newUser, 30);
   await db.addAuditLog('CLIENT_REGISTER', `Cliente ${newUser.name} se cadastrou`, newUser.id, newUser.name, req.ip);
-  return res.status(201).json({ message: 'Cadastro realizado com sucesso!', user: publicUser(newUser), token });
+  return res.status(201).json({ message: 'Cadastro realizado com sucesso!', user: publicUser(newUser) });
 }));
 
 app.post('/api/auth/login', h(async (req, res) => {
-  const ip = req.ip || 'unknown';
-  if (await db.isIpLocked(ip)) {
-    return res.status(429).json({ error: 'Muitas tentativas falhas. Bloqueado por 15 minutos por segurança.' });
-  }
   const { loginIdentifier, password } = req.body || {};
   if (!loginIdentifier || !password) {
     return res.status(400).json({ error: 'Informe seu e-mail e senha.' });
   }
-  const user = await db.findUserByEmail(String(loginIdentifier).trim().toLowerCase());
+  const email = String(loginIdentifier).trim().toLowerCase();
+  if (await isBlocked(req, [[acctFailKey(email), MAX_FAILS_PER_ACCOUNT]])) {
+    return res.status(429).json({ error: BLOCKED_MSG });
+  }
+  const user = await db.findUserByEmail(email);
   if (!user || !bcrypt.compareSync(String(password), user.passwordHash)) {
-    await db.recordFailedLogin(ip);
+    await recordFailure(req, acctFailKey(email));
     return res.status(401).json({ error: 'Credenciais inválidas. Verifique seu e-mail e senha.' });
   }
   // O administrador só entra pelo fluxo com 2FA
   if (user.role === 'barber_admin') {
     return res.status(403).json({ error: 'Conta de administrador: use o "Acesso do Barbeiro".' });
   }
-  await db.resetFailedLogin(ip);
-  const token = jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '30d' });
-  setSessionCookie(res, token, 30);
-  return res.json({ message: 'Login realizado com sucesso!', user: publicUser(user), token });
+  await db.clearCounter(acctFailKey(email));
+  issueSession(res, user, 30);
+  return res.json({ message: 'Login realizado com sucesso!', user: publicUser(user) });
 }));
 
 // ========== LOGIN DO BARBEIRO (2 ETAPAS) ==========
+// Etapa 1: e-mail + senha. Se o admin ainda não tem 2FA (admin novo), já devolve o QR Code para ativar.
+// Etapa 2: código do Google Authenticator (e, na ativação, a senha definitiva).
 
 app.post('/api/auth/barber/login-step1', h(async (req, res) => {
-  const ip = req.ip || 'unknown';
-  if (await db.isIpLocked(ip)) {
-    return res.status(429).json({ error: 'Bloqueio preventivo de força bruta ativo. Aguarde 15 minutos.' });
-  }
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: 'Informe o e-mail administrativo e senha.' });
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (await isBlocked(req, [[acctFailKey(cleanEmail), MAX_FAILS_PER_ACCOUNT]])) {
+    return res.status(429).json({ error: BLOCKED_MSG });
+  }
 
-  const user = await db.findUserByEmail(String(email).trim().toLowerCase());
+  const user = await db.findUserByEmail(cleanEmail);
   if (!user || user.role !== 'barber_admin' || !bcrypt.compareSync(String(password), user.passwordHash)) {
-    await db.recordFailedLogin(ip);
+    await recordFailure(req, acctFailKey(cleanEmail));
     return res.status(401).json({ error: 'Credenciais administrativas incorretas.' });
   }
+  await db.clearCounter(acctFailKey(cleanEmail));
+
   if (!user.twoFactorSecret) {
-    return res.status(409).json({ error: '2FA não configurado para este administrador. Acesse /api/setup.' });
+    // Primeiro acesso de um admin cadastrado por outro admin: gera o 2FA dele (só vale depois de confirmado)
+    const pending = newTotpSecret();
+    await db.updateUser(user.id, { twoFactorPendingSecret: pending });
+    const tempToken = jwt.sign({ id: user.id, tv: user.tokenVersion, purpose: 'enroll' }, JWT_SECRET, { expiresIn: '10m', algorithm: 'HS256' });
+    return res.json({
+      message: 'Primeiro acesso: escaneie o QR Code no Google Authenticator e defina sua senha definitiva.',
+      tempToken,
+      requires2FASetup: true,
+      ...(await qrFor(pending, user.email)),
+    });
   }
-  const tempToken = jwt.sign({ id: user.id, is2FAPending: true }, JWT_SECRET, { expiresIn: '5m' });
+
+  const tempToken = jwt.sign({ id: user.id, tv: user.tokenVersion, purpose: '2fa' }, JWT_SECRET, { expiresIn: '5m', algorithm: 'HS256' });
   return res.json({ message: 'Credenciais válidas. Prossiga para a validação do 2FA.', tempToken, requires2FA: true });
 }));
 
 app.post('/api/auth/barber/login-step2', h(async (req, res) => {
-  const ip = req.ip || 'unknown';
-  if (await db.isIpLocked(ip)) {
-    return res.status(429).json({ error: 'Bloqueio preventivo de força bruta ativo. Aguarde 15 minutos.' });
-  }
-  const { tempToken, code } = req.body || {};
+  const { tempToken, code, newPassword } = req.body || {};
   if (!tempToken || !code) return res.status(400).json({ error: 'Token temporário e código 2FA são obrigatórios.' });
 
   let decoded: any;
   try {
-    decoded = jwt.verify(tempToken, JWT_SECRET);
+    decoded = jwt.verify(tempToken, JWT_SECRET, { algorithms: ['HS256'] });
   } catch {
     return res.status(401).json({ error: 'Sessão 2FA expirada. Faça login novamente.' });
   }
-  if (!decoded.is2FAPending) return res.status(400).json({ error: 'Fluxo 2FA inválido.' });
+  if (decoded?.purpose !== '2fa' && decoded?.purpose !== 'enroll') return res.status(400).json({ error: 'Fluxo 2FA inválido.' });
 
   const user = await db.findUserById(decoded.id);
-  if (!user || user.role !== 'barber_admin' || !user.twoFactorSecret) {
-    return res.status(404).json({ error: 'Administrador não encontrado.' });
+  if (!user || user.role !== 'barber_admin' || user.tokenVersion !== Number(decoded.tv)) {
+    return res.status(401).json({ error: 'Sessão 2FA inválida. Faça login novamente.' });
+  }
+  const key = twoFaFailKey(user.id);
+  if (await isBlocked(req, [[key, MAX_FAILS_2FA]])) return res.status(429).json({ error: BLOCKED_MSG });
+
+  // ---- Ativação do 2FA (primeiro acesso) ----
+  if (decoded.purpose === 'enroll') {
+    if (!user.twoFactorPendingSecret) return res.status(400).json({ error: 'Ativação expirada. Faça login novamente.' });
+    if (!validNewAdminPassword(newPassword)) return res.status(400).json({ error: 'Defina uma senha definitiva de 10 a 100 caracteres.' });
+    if (bcrypt.compareSync(String(newPassword), user.passwordHash)) return res.status(400).json({ error: 'A senha definitiva precisa ser diferente da senha provisória.' });
+    const counter = verifyTotp(user.twoFactorPendingSecret, String(code));
+    if (counter === null) {
+      await recordFailure(req, key);
+      return res.status(401).json({ error: 'Código inválido. Confira se escaneou o QR Code certo e se o relógio do celular está automático.' });
+    }
+    const updated = await db.updateUser(user.id, {
+      twoFactorSecret: user.twoFactorPendingSecret,
+      twoFactorPendingSecret: null,
+      twoFactorLastCounter: counter,
+      passwordHash: bcrypt.hashSync(String(newPassword), 12),
+      bumpTokenVersion: true,
+    });
+    await db.clearCounter(key);
+    issueSession(res, updated!, 3);
+    await db.addAuditLog('ADMIN_2FA_ENROLLED', `${user.name} ativou o 2FA no primeiro acesso`, user.id, user.name, req.ip);
+    return res.json({ message: '2FA ativado e senha definida! Bem-vindo ao painel.', user: publicUser(updated!) });
   }
 
-  let valid = false;
-  try {
-    valid = verifySync({ token: String(code).trim(), secret: user.twoFactorSecret }).valid;
-  } catch {
-    valid = false;
+  // ---- Login normal ----
+  if (!user.twoFactorSecret) return res.status(400).json({ error: '2FA não configurado. Faça login novamente.' });
+  const counter = verifyTotp(user.twoFactorSecret, String(code), user.twoFactorLastCounter);
+  if (counter === null || !(await db.consumeTotpCounter(user.id, counter))) {
+    await recordFailure(req, key);
+    return res.status(401).json({ error: 'Código 2FA inválido, expirado ou já usado. Espere o próximo código e tente novamente.' });
   }
-  if (!valid) {
-    await db.recordFailedLogin(ip);
-    return res.status(401).json({ error: 'Código 2FA inválido ou expirado. Tente novamente.' });
-  }
-
-  await db.resetFailedLogin(ip);
-  const fullToken = jwt.sign({ id: user.id, email: user.email, role: 'barber_admin', name: user.name }, JWT_SECRET, { expiresIn: '3d' });
-  setSessionCookie(res, fullToken, 3);
+  await db.clearCounter(key);
+  issueSession(res, user, 3);
   await db.addAuditLog('ADMIN_LOGIN_2FA', `${user.name} realizou login com 2FA`, user.id, user.name, req.ip);
-  return res.json({ message: 'Autenticação 2FA concluída com sucesso!', user: publicUser(user), token: fullToken });
+  return res.json({ message: 'Autenticação 2FA concluída com sucesso!', user: publicUser(user) });
 }));
 
-// QR Code do 2FA: agora SÓ para o admin já autenticado (antes era público!)
-app.get('/api/auth/barber/2fa-setup', authenticateToken, requireBarberAdmin, h(async (req, res) => {
-  const admin = await db.findUserById(req.user!.id);
-  if (!admin?.twoFactorSecret) return res.status(404).json({ error: '2FA não configurado.' });
-  const otpauth = generateURI({ secret: admin.twoFactorSecret, issuer: 'BARBERSHOP L.A', label: admin.name });
-  const qrCodeDataUrl = await QRCode.toDataURL(otpauth, { margin: 2, width: 250 });
-  return res.json({ secret: admin.twoFactorSecret, otpauth, qrCodeDataUrl });
+// ========== GESTÃO DE ADMINISTRADORES (vários barbeiros, cada um com o próprio 2FA) ==========
+// Toda ação sensível pede o código ATUAL do Google Authenticator de quem está logado.
+
+const adminView = (u: UserRow, meId: string) => ({
+  id: u.id, name: u.name, email: u.email, phone: u.phone,
+  has2FA: !!u.twoFactorSecret, isMe: u.id === meId, createdAt: u.createdAt,
+});
+
+app.get('/api/admin/admins', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const admins = await db.listAdmins();
+  return res.json({ admins: admins.map((a) => adminView(a, req.user!.id)) });
+}));
+
+// Cadastra outro admin com senha PROVISÓRIA. No primeiro login ele escaneia o próprio QR Code e troca a senha.
+app.post('/api/admin/admins', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const { name, email, phone = '', tempPassword, code } = req.body || {};
+  const cleanName = String(name ?? '').trim().slice(0, 80);
+  const cleanEmail = String(email ?? '').trim().toLowerCase();
+  if (!cleanName) return res.status(400).json({ error: 'Informe o nome do novo administrador.' });
+  if (!EMAIL_RE.test(cleanEmail) || cleanEmail.length > 120 || cleanEmail.endsWith(`@${GUEST_EMAIL_DOMAIN}`)) return res.status(400).json({ error: 'Informe um e-mail válido.' });
+  if (!validNewAdminPassword(tempPassword)) return res.status(400).json({ error: 'A senha provisória deve ter de 10 a 100 caracteres.' });
+  if (await db.findUserByEmail(cleanEmail)) return res.status(400).json({ error: 'Já existe uma conta com este e-mail.' });
+  if (!(await checkAdminCode(req, res, code))) return;
+
+  const created = await db.createUser({
+    role: 'barber_admin',
+    name: cleanName,
+    phone: String(phone).trim().slice(0, 20),
+    email: cleanEmail,
+    passwordHash: bcrypt.hashSync(String(tempPassword), 12),
+  });
+  await db.addAuditLog('ADMIN_CREATED', `${req.user!.name} cadastrou o admin ${created.name} (${created.email})`, req.user!.id, req.user!.name, req.ip);
+  const admins = await db.listAdmins();
+  return res.status(201).json({ admins: admins.map((a) => adminView(a, req.user!.id)) });
+}));
+
+app.delete('/api/admin/admins/:id', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const targetId = String(req.params.id);
+  if (targetId === req.user!.id) return res.status(400).json({ error: 'Você não pode remover a própria conta.' });
+  const target = await db.findUserById(targetId);
+  if (!target || target.role !== 'barber_admin') return res.status(404).json({ error: 'Administrador não encontrado.' });
+  if (!(await checkAdminCode(req, res, req.body?.code))) return;
+  await db.deleteUser(target.id); // as sessões dele morrem junto (o usuário não existe mais)
+  await db.addAuditLog('ADMIN_REMOVED', `${req.user!.name} removeu o admin ${target.name} (${target.email})`, req.user!.id, req.user!.name, req.ip);
+  const admins = await db.listAdmins();
+  return res.json({ admins: admins.map((a) => adminView(a, req.user!.id)) });
+}));
+
+// Trocar o 2FA de celular — etapa 1: confirma o código do celular ATUAL e gera um QR novo
+app.post('/api/admin/2fa/start', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const user = await checkAdminCode(req, res, req.body?.code);
+  if (!user) return;
+  const pending = newTotpSecret();
+  await db.updateUser(user.id, { twoFactorPendingSecret: pending });
+  return res.json(await qrFor(pending, user.email));
+}));
+
+// Etapa 2: confirma com um código do celular NOVO. Só então o celular antigo para de funcionar.
+app.post('/api/admin/2fa/confirm', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const user = await db.findUserById(req.user!.id);
+  if (!user?.twoFactorPendingSecret) return res.status(400).json({ error: 'Nenhuma troca de 2FA em andamento. Comece de novo.' });
+  const key = twoFaFailKey(user.id);
+  if (await isBlocked(req, [[key, MAX_FAILS_2FA]])) return res.status(429).json({ error: BLOCKED_MSG });
+  const counter = verifyTotp(user.twoFactorPendingSecret, String(req.body?.code ?? ''));
+  if (counter === null) {
+    await recordFailure(req, key);
+    return res.status(401).json({ error: 'Código do celular novo inválido. Confira se escaneou o QR Code novo.' });
+  }
+  const updated = await db.updateUser(user.id, {
+    twoFactorSecret: user.twoFactorPendingSecret,
+    twoFactorPendingSecret: null,
+    twoFactorLastCounter: counter,
+    bumpTokenVersion: true, // derruba sessões em outros aparelhos
+  });
+  await db.clearCounter(key);
+  issueSession(res, updated!, 3); // mantém ESTE aparelho logado
+  await db.addAuditLog('ADMIN_2FA_ROTATED', `${user.name} moveu o 2FA para outro celular`, user.id, user.name, req.ip);
+  return res.json({ message: '2FA transferido! A partir de agora vale só o código do celular novo.' });
+}));
+
+// Trocar a própria senha (pede senha atual + código do autenticador)
+app.post('/api/admin/password', authenticateToken, requireBarberAdmin, h(async (req, res) => {
+  const { currentPassword, newPassword, code } = req.body || {};
+  const me = await db.findUserById(req.user!.id);
+  if (!me) return res.status(401).json({ error: 'Sessão inválida.' });
+  if (!validNewAdminPassword(newPassword)) return res.status(400).json({ error: 'A nova senha deve ter de 10 a 100 caracteres.' });
+  if (await isBlocked(req, [[acctFailKey(me.email), MAX_FAILS_PER_ACCOUNT]])) return res.status(429).json({ error: BLOCKED_MSG });
+  if (!bcrypt.compareSync(String(currentPassword ?? ''), me.passwordHash)) {
+    await recordFailure(req, acctFailKey(me.email));
+    return res.status(401).json({ error: 'Senha atual incorreta.' });
+  }
+  if (!(await checkAdminCode(req, res, code))) return;
+  const updated = await db.updateUser(me.id, { passwordHash: bcrypt.hashSync(String(newPassword), 12), bumpTokenVersion: true });
+  issueSession(res, updated!, 3);
+  await db.addAuditLog('ADMIN_PASSWORD_CHANGED', `${me.name} trocou a senha`, me.id, me.name, req.ip);
+  return res.json({ message: 'Senha alterada. Sessões em outros aparelhos foram encerradas.' });
 }));
 
 // ========== RECUPERAÇÃO DE SENHA (somente clientes) ==========
@@ -258,7 +468,7 @@ app.post('/api/auth/forgot-password', limit('forgot', 5, 60 * 60_000), h(async (
         `<p>Ele vale por 15 minutos. Se não foi você, ignore este e-mail.</p>`
     );
     // Só para testes: devolve o código na resposta (nunca ative em produção)
-    if (process.env.ALLOW_PREVIEW_RESET_TOKEN === 'true') response.previewToken = resetToken;
+    if (process.env.ALLOW_PREVIEW_RESET_TOKEN === 'true' && !isProd) response.previewToken = resetToken;
   }
   return res.json(response);
 }));
@@ -278,10 +488,13 @@ app.get('/api/auth/me', authenticateToken, h(async (req, res) => {
   return res.json({ user: publicUser(user) });
 }));
 
-app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie('auth_token');
+app.post('/api/auth/logout', h(async (req, res) => {
+  // Admin: "Sair" encerra a sessão em TODOS os aparelhos (um cookie copiado também deixa de valer)
+  const user = await loadSession(req).catch(() => null);
+  if (user?.role === 'barber_admin') await db.updateUser(user.id, { bumpTokenVersion: true });
+  res.clearCookie('auth_token', { httpOnly: true, secure: isProd, sameSite: 'strict', path: '/' });
   return res.json({ message: 'Sessão encerrada com sucesso.' });
-});
+}));
 
 // ========== DADOS PÚBLICOS ==========
 
@@ -340,19 +553,6 @@ const slotMoment = (date: string, time: string) => new Date(`${date}T${time}:00-
 const todayBR = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 
 const validSlotsFor = daySlots; // horários de início (30 em 30 min) — ver src/server/slots.ts
-
-// Se houver token válido, identifica o usuário; senão segue como visitante
-function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction) {
-  const authHeader = req.headers['authorization'];
-  const token = (authHeader && authHeader.split(' ')[1]) || req.cookies?.auth_token;
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET) as any;
-      if (!decoded.is2FAPending) req.user = decoded;
-    } catch { /* visitante */ }
-  }
-  next();
-}
 
 // Horários já ocupados de um dia (sem dados pessoais)
 app.get('/api/appointments/taken', h(async (req, res) => {
@@ -420,9 +620,9 @@ app.post('/api/appointments', limit('appointments', 20, 60 * 60_000), optionalAu
   const guestEmail = String(b.clientEmail || '').trim().toLowerCase().slice(0, 120);
   const email = req.user
     ? req.user.email
-    : /^[^\s@,()]+@[^\s@,()]+\.[^\s@,()]+$/.test(guestEmail)
+    : EMAIL_RE.test(guestEmail)
       ? guestEmail
-      : `${clientPhone.replace(/\D/g, '')}@barbershopla.com.br`;
+      : `${clientPhone.replace(/\D/g, '')}@${GUEST_EMAIL_DOMAIN}`;
 
   try {
     const apt = await db.createAppointment({
@@ -444,7 +644,7 @@ app.post('/api/appointments', limit('appointments', 20, 60 * 60_000), optionalAu
 }));
 
 app.get('/api/appointments/mine', authenticateToken, h(async (req, res) => {
-  const list = await db.getAppointmentsForUser(req.user!.id, req.user!.email);
+  const list = await db.getAppointmentsForUser(req.user!.id, req.user!.email, req.user!.emailVerified);
   return res.json({ appointments: list });
 }));
 
@@ -453,7 +653,10 @@ app.patch('/api/appointments/:id/cancel', authenticateToken, h(async (req, res) 
   if (!apt) return res.status(404).json({ error: 'Agendamento não encontrado.' });
 
   const isAdmin = req.user!.role === 'barber_admin';
-  const isOwner = apt.userId === req.user!.id || apt.clientEmail.toLowerCase() === req.user!.email.toLowerCase();
+  // Dono = quem agendou logado, OU conta com e-mail COMPROVADO igual ao do agendamento.
+  // (Antes bastava criar uma conta com o e-mail da vítima, sem confirmar, para ver e cancelar os horários dela.)
+  const sameEmail = apt.clientEmail.toLowerCase() === req.user!.email.toLowerCase() && !apt.clientEmail.toLowerCase().endsWith(`@${GUEST_EMAIL_DOMAIN}`);
+  const isOwner = apt.userId === req.user!.id || (req.user!.emailVerified && sameEmail);
   if (!isAdmin && !isOwner) return res.status(403).json({ error: 'Você não pode cancelar este agendamento.' });
   if (apt.status === 'cancelled' || apt.status === 'completed') return res.status(400).json({ error: 'Este agendamento não pode mais ser cancelado.' });
   if (!isAdmin && apt.paymentStatus === 'paid' && apt.paymentMethod !== 'in_person') {
@@ -667,6 +870,10 @@ app.post('/api/payments/webhook', h(async (req, res) => {
   const dataId = String(req.query['data.id'] || req.query.id || req.body?.data?.id || '');
 
   const secret = process.env.MP_WEBHOOK_SECRET;
+  if (!secret && ONLINE_PAYMENTS_ENABLED && isProd) {
+    console.error('MP_WEBHOOK_SECRET ausente: webhook recusado. Configure a chave secreta do Mercado Pago na Vercel.');
+    return res.status(503).json({ error: 'Webhook não configurado.' });
+  }
   if (secret) {
     const xSignature = String(req.headers['x-signature'] || '');
     const xRequestId = String(req.headers['x-request-id'] || '');
@@ -711,15 +918,6 @@ const page = (body: string) =>
   `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Setup</title>` +
   `<body style="font-family:sans-serif;background:#0a0a0a;color:#eee;max-width:440px;margin:40px auto;padding:0 16px">${body}</body>`;
 
-function base32(buf: Buffer): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits = '';
-  for (const b of buf) bits += b.toString(2).padStart(8, '0');
-  let out = '';
-  for (let i = 0; i + 5 <= bits.length; i += 5) out += alphabet[parseInt(bits.slice(i, i + 5), 2)];
-  return out;
-}
-
 const safeEqual = (a: string, b: string) => {
   const A = Buffer.from(a), B = Buffer.from(b);
   return A.length === B.length && crypto.timingSafeEqual(A, B);
@@ -744,7 +942,7 @@ app.post('/api/setup', limit('setup', 10, 60 * 60_000), h(async (req, res) => {
   if (!password || String(password).length < 10) return res.status(400).send(page('<h2>Senha muito curta (mín. 10).</h2>'));
   if (await db.hasAdmin()) return res.status(409).send(page('<h2>Admin já existe.</h2><p>Setup concluído. Remova SETUP_KEY da Vercel.</p>'));
 
-  const secret = base32(crypto.randomBytes(20));
+  const secret = newTotpSecret();
   const admin = await db.createUser({
     role: 'barber_admin',
     name: 'Leonardo Arruda',
@@ -754,8 +952,7 @@ app.post('/api/setup', limit('setup', 10, 60 * 60_000), h(async (req, res) => {
     twoFactorSecret: secret,
   });
   await db.addAuditLog('ADMIN_SETUP', 'Administrador criado via /api/setup', admin.id, admin.name, req.ip);
-  const otpauth = generateURI({ secret, issuer: 'BARBERSHOP L.A', label: admin.name });
-  const qr = await QRCode.toDataURL(otpauth, { margin: 2, width: 260 });
+  const { qrCodeDataUrl: qr } = await qrFor(secret, admin.email);
   res.type('html').send(page(`
     <h2>Admin criado ✅</h2>
     <p>E-mail: <b>${esc(admin.email)}</b></p>
